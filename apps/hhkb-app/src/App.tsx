@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import { Box, Flex, HStack, Text, VStack } from '@chakra-ui/react';
-import { Layers } from 'lucide-react';
+import { Box, Button, Flex, HStack, Text, Tooltip, useToast, VStack } from '@chakra-ui/react';
+import { Zap } from 'lucide-react';
 import { Header } from './components/Header';
 import { KeyboardSvg } from './components/KeyboardSvg';
 import { KeyDetailPanel } from './components/KeyDetailPanel';
 import { DaemonBanner } from './components/DaemonBanner';
+import { SyncBanner } from './components/SyncBanner';
+import { DipSwitchDisplay } from './components/DipSwitchDisplay';
 import { EmptyState } from './components/EmptyState';
 import { EventLog } from './components/EventLog';
 import { useDeviceStore } from './store/deviceStore';
 import { useDaemonStore } from './store/daemonStore';
 import { useProfileStore } from './store/profileStore';
+import { useKeyboardThemeStore } from './store/keyboardThemeStore';
 
 export default function App() {
   const deviceStatus = useDeviceStore((s) => s.status);
@@ -56,6 +59,7 @@ export default function App() {
     <Flex direction="column" minH="100vh" bg="bg.primary" color="text.primary">
       <Header />
       <DaemonBanner />
+      <SyncBanner />
 
       <Box maxW="1280px" w="100%" mx="auto" px={{ base: 4, md: 6 }} py={6}>
         {deviceStatus === 'connected' ? (
@@ -64,25 +68,56 @@ export default function App() {
             direction={{ base: 'column', xl: 'row' }}
             align="stretch"
           >
+            {/* ---- Left: keyboard + controls ---- */}
             <Box flex="1 1 auto" minW={0}>
               <VStack align="stretch" spacing={4}>
-                <Flex align="center" justify="space-between">
-                  <HStack spacing={2}>
-                    <Box color="text.muted" display="flex">
-                      <Layers size={14} />
-                    </Box>
+                {/* Title + transport badge */}
+                <Flex align="center" justify="space-between" pt={1}>
+                  <Box>
                     <Text
-                      fontSize="10px"
-                      color="text.muted"
-                      fontFamily="mono"
-                      textTransform="uppercase"
-                      letterSpacing="0.08em"
+                      fontSize={{ base: 'sm', md: 'md' }}
+                      fontWeight={500}
+                      color="text.primary"
+                      letterSpacing="-0.005em"
                     >
-                      Layer
+                      HHKB Professional HYBRID Type-S
                     </Text>
-                  </HStack>
-                  <LayerTabs layer={layer} onChange={setLayer} />
+                    <Text fontSize="11px" color="text.muted" fontFamily="mono">
+                      US Layout · Non-Printed
+                    </Text>
+                  </Box>
+                  <WriteToHHKBButton />
                 </Flex>
+
+                {/* Toolbar */}
+                <Flex align="center" justify="space-between" wrap="wrap" gap={2}>
+                  {/* Legend */}
+                  <HStack spacing={3}>
+                    <HStack spacing={1.5}>
+                      <Box
+                        w="8px" h="8px" borderRadius="full"
+                        bg="accent.primary" flexShrink={0}
+                      />
+                      <Text fontSize="10px" color="text.muted" fontFamily="mono">
+                        SW override
+                      </Text>
+                    </HStack>
+                    <HStack spacing={1.5}>
+                      <Box
+                        w="8px" h="8px" borderRadius="full"
+                        bg="#f97316" flexShrink={0}
+                      />
+                      <Text fontSize="10px" color="text.muted" fontFamily="mono">
+                        HW modified
+                      </Text>
+                    </HStack>
+                  </HStack>
+                  <HStack spacing={3}>
+                    <KeyboardThemeToggle />
+                    <LayerTabs layer={layer} onChange={setLayer} />
+                  </HStack>
+                </Flex>
+
                 <KeyboardSvg
                   layer={layer}
                   selectedIndex={selectedIndex}
@@ -90,11 +125,16 @@ export default function App() {
                 />
               </VStack>
             </Box>
+
+            {/* ---- Right: key detail + dip switches ---- */}
             <Box w={{ base: '100%', xl: '360px' }} flexShrink={0}>
-              <KeyDetailPanel
-                selectedIndex={selectedIndex}
-                layer={layer}
-              />
+              <VStack align="stretch" spacing={4}>
+                <KeyDetailPanel
+                  selectedIndex={selectedIndex}
+                  layer={layer}
+                />
+                <DipSwitchDisplay />
+              </VStack>
             </Box>
           </Flex>
         ) : (
@@ -104,6 +144,107 @@ export default function App() {
 
       <EventLog />
     </Flex>
+  );
+}
+
+function WriteToHHKBButton() {
+  const toast = useToast();
+  const writeKeymaps = useDeviceStore((s) => s.writeKeymaps);
+  const daemonStatus = useDaemonStore((s) => s.status);
+  const [writing, setWriting] = useState(false);
+  const disabled = daemonStatus !== 'online';
+
+  async function handleWrite() {
+    setWriting(true);
+    try {
+      await writeKeymaps();
+      toast({
+        title: 'Written to HHKB',
+        description: 'Keymap flushed to keyboard EEPROM.',
+        status: 'success',
+        duration: 3000,
+      });
+    } catch (e) {
+      toast({
+        title: 'Write failed',
+        description: e instanceof Error ? e.message : String(e),
+        status: 'error',
+        duration: 5000,
+      });
+    } finally {
+      setWriting(false);
+    }
+  }
+
+  return (
+    <Tooltip
+      label={disabled ? 'Daemon required to write EEPROM' : 'Flash current keymap to HHKB EEPROM'}
+      hasArrow={false}
+      placement="bottom-end"
+      openDelay={300}
+    >
+      <Button
+        size="sm"
+        variant="outline"
+        leftIcon={<Zap size={13} />}
+        isLoading={writing}
+        isDisabled={disabled}
+        onClick={() => void handleWrite()}
+        fontFamily="mono"
+        fontSize="11px"
+      >
+        Write to HHKB
+      </Button>
+    </Tooltip>
+  );
+}
+
+function KeyboardThemeToggle() {
+  const theme = useKeyboardThemeStore((s) => s.theme);
+  const setTheme = useKeyboardThemeStore((s) => s.setTheme);
+  return (
+    <HStack
+      spacing={0}
+      p="3px"
+      bg="bg.subtle"
+      border="1px solid"
+      borderColor="border.subtle"
+      borderRadius="md"
+      role="group"
+      aria-label="Keyboard case color"
+    >
+      {(
+        [
+          { id: 'charcoal', label: 'Charcoal' },
+          { id: 'ivory', label: 'White' },
+        ] as const
+      ).map((t) => {
+        const active = theme === t.id;
+        return (
+          <Box
+            key={t.id}
+            as="button"
+            px={3}
+            py={1}
+            borderRadius="sm"
+            bg={active ? 'bg.elevated' : 'transparent'}
+            color={active ? 'text.primary' : 'text.muted'}
+            fontWeight={500}
+            fontSize="11px"
+            fontFamily="mono"
+            textTransform="uppercase"
+            letterSpacing="0.08em"
+            border="1px solid"
+            borderColor={active ? 'border.subtle' : 'transparent'}
+            transition="background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease"
+            _hover={{ color: 'text.primary' }}
+            onClick={() => setTheme(t.id)}
+          >
+            {t.label}
+          </Box>
+        );
+      })}
+    </HStack>
   );
 }
 

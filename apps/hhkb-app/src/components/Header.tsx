@@ -10,6 +10,7 @@ import {
   MenuList,
   Button,
   Text,
+  Tag,
   Tooltip,
 } from '@chakra-ui/react';
 import {
@@ -22,12 +23,16 @@ import {
   Upload,
   Check,
   Plus,
+  Camera,
+  Factory,
 } from 'lucide-react';
 import { useProfileStore } from '../store/profileStore';
 import { useDaemonStore } from '../store/daemonStore';
 import { useDeviceStore } from '../store/deviceStore';
 import { ConnectButton } from './ConnectButton';
 import { ProfileImportExport } from './ProfileImportExport';
+import { NewProfileDialog, type NewProfileMode } from './NewProfileDialog';
+import { FACTORY_PROFILE_IDS } from '../data/factoryDefault';
 
 export function Header() {
   const profiles = useProfileStore((s) => s.profiles);
@@ -41,6 +46,7 @@ export function Header() {
   const transport = useDeviceStore((s) => s.transportMode)();
 
   const [importOpen, setImportOpen] = useState(false);
+  const [newProfileMode, setNewProfileMode] = useState<NewProfileMode | null>(null);
 
   const daemonMeta =
     daemonStatus === 'online'
@@ -148,6 +154,7 @@ export function Header() {
                 )}
                 {profiles.map((p) => {
                   const isActive = p.id === activeId;
+                  const isFactory = FACTORY_PROFILE_IDS.has(p.id);
                   return (
                     <MenuItem
                       key={p.id}
@@ -155,20 +162,30 @@ export function Header() {
                         void setActive(p.id);
                       }}
                       icon={
-                        <Box w="14px" h="14px" display="inline-flex">
+                        <Box w="14px" h="14px" display="inline-flex" alignItems="center">
                           {isActive ? (
                             <Check size={14} strokeWidth={2.5} />
+                          ) : isFactory ? (
+                            <Factory size={12} />
                           ) : null}
                         </Box>
                       }
                     >
-                      <HStack justify="space-between" w="100%">
-                        <Text fontSize="sm">{p.name}</Text>
-                        {p.tags && p.tags.length > 0 && (
+                      <HStack justify="space-between" w="100%" spacing={2}>
+                        <Text fontSize="sm" noOfLines={1}>{p.name}</Text>
+                        {isFactory && (
+                          <Tag size="sm" variant="subtle" flexShrink={0}>
+                            <Text fontSize="9px" fontFamily="mono" textTransform="uppercase">
+                              factory
+                            </Text>
+                          </Tag>
+                        )}
+                        {!isFactory && p.tags && p.tags.length > 0 && (
                           <Text
                             fontSize="10px"
                             color="text.muted"
                             fontFamily="mono"
+                            flexShrink={0}
                           >
                             {p.tags[0]}
                           </Text>
@@ -177,6 +194,19 @@ export function Header() {
                     </MenuItem>
                   );
                 })}
+                <MenuDivider />
+                <MenuItem
+                  icon={<Plus size={14} />}
+                  onClick={() => setNewProfileMode('blank')}
+                >
+                  New blank profile
+                </MenuItem>
+                <MenuItem
+                  icon={<Camera size={14} />}
+                  onClick={() => setNewProfileMode('capture')}
+                >
+                  Capture hardware as profile
+                </MenuItem>
                 <MenuDivider />
                 <MenuItem
                   icon={<Upload size={14} />}
@@ -189,9 +219,6 @@ export function Header() {
                   onClick={() => setImportOpen(true)}
                 >
                   Export profile
-                </MenuItem>
-                <MenuItem icon={<Plus size={14} />} isDisabled>
-                  New profile
                 </MenuItem>
               </MenuList>
             </Menu>
@@ -237,6 +264,16 @@ export function Header() {
       <ProfileImportExport
         isOpen={importOpen}
         onClose={() => setImportOpen(false)}
+      />
+
+      <NewProfileDialog
+        isOpen={newProfileMode !== null}
+        mode={newProfileMode ?? 'blank'}
+        onClose={() => setNewProfileMode(null)}
+        onCreated={(id) => {
+          void setActive(id);
+          setNewProfileMode(null);
+        }}
       />
     </>
   );
