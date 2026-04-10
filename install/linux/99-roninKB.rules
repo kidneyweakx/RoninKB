@@ -1,0 +1,14 @@
+# Allow user-mode access to HHKB Hybrid HID interfaces.
+#
+# Drop this file into /etc/udev/rules.d/ and reload:
+#     sudo cp 99-roninKB.rules /etc/udev/rules.d/
+#     sudo udevadm control --reload-rules
+#     sudo udevadm trigger
+#
+# Vendor 0x04fe is PFU Limited (HHKB manufacturer). The specific product IDs
+# covered below are the three USB interfaces HHKB Hybrid exposes (raw, VIA,
+# and keymap). TAG+="uaccess" grants the currently-seated user read/write
+# permission on the hidraw node without requiring root.
+KERNEL=="hidraw*", ATTRS{idVendor}=="04fe", ATTRS{idProduct}=="0020", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="04fe", ATTRS{idProduct}=="0021", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="04fe", ATTRS{idProduct}=="0022", TAG+="uaccess"

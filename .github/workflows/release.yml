@@ -1,0 +1,401 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.1.0)'
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  # Resolved once so every job uses the same name whether triggered by a tag
+  # push or a manual workflow_dispatch.
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            archive: tar.gz
+            cross: true
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/hhkb-app/package-lock.json
+
+      - name: Build frontend
+        working-directory: apps/hhkb-app
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux system deps
+        if: runner.os == 'Linux' && !matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev libxdo-dev pkg-config
+
+      - name: Install cross (Linux aarch64)
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target }}
+
+      - name: Build (cargo)
+        if: '!matrix.cross'
+        shell: bash
+        run: |
+          cargo build --release --target ${{ matrix.target }} \
+            -p hhkb-cli -p hhkb-daemon \
+            --features hhkb-core/hidapi-backend,hhkb-daemon/embedded-ui
+
+      - name: Build (cross)
+        if: matrix.cross
+        shell: bash
+        run: |
+          cross build --release --target ${{ matrix.target }} \
+            -p hhkb-cli -p hhkb-daemon \
+            --features hhkb-core/hidapi-backend,hhkb-daemon/embedded-ui
+
+      - name: Stage release files (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          TAG="${RELEASE_TAG}"
+          STAGE="staging/roninKB-${TAG}-${{ matrix.target }}"
+          mkdir -p "${STAGE}/bin"
+          cp "target/${{ matrix.target }}/release/hhkb" "${STAGE}/bin/hhkb"
+          cp "target/${{ matrix.target }}/release/hhkb-daemon" "${STAGE}/bin/hhkb-daemon"
+          strip "${STAGE}/bin/hhkb" || true
+          strip "${STAGE}/bin/hhkb-daemon" || true
+          cp -R install "${STAGE}/install"
+          if [ -f README.md ]; then cp README.md "${STAGE}/README.md"; fi
+          if [ -f LICENSE ]; then cp LICENSE "${STAGE}/LICENSE"; fi
+
+      - name: Stage release files (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $Tag = $env:RELEASE_TAG
+          $Stage = "staging/roninKB-$Tag-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path "$Stage/bin" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/hhkb.exe" "$Stage/bin/hhkb.exe"
+          Copy-Item "target/${{ matrix.target }}/release/hhkb-daemon.exe" "$Stage/bin/hhkb-daemon.exe"
+          Copy-Item -Recurse install "$Stage/install"
+          if (Test-Path README.md) { Copy-Item README.md "$Stage/README.md" }
+          if (Test-Path LICENSE)   { Copy-Item LICENSE   "$Stage/LICENSE"   }
+
+      - name: Create archive (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          TAG="${RELEASE_TAG}"
+          NAME="roninKB-${TAG}-${{ matrix.target }}"
+          tar -czf "${NAME}.tar.gz" -C staging "${NAME}"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256"
+          else
+            shasum -a 256 "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256"
+          fi
+
+      - name: Create archive (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $Tag = $env:RELEASE_TAG
+          $Name = "roninKB-$Tag-${{ matrix.target }}"
+          Compress-Archive -Path "staging/$Name" -DestinationPath "$Name.zip"
+          $Hash = (Get-FileHash -Algorithm SHA256 "$Name.zip").Hash.ToLower()
+          "$Hash  $Name.zip" | Out-File -Encoding ascii "$Name.zip.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            roninKB-*.tar.gz
+            roninKB-*.tar.gz.sha256
+            roninKB-*.zip
+            roninKB-*.zip.sha256
+          if-no-files-found: error
+
+  universal-mac:
+    name: Universal macOS binary
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - name: Download x86_64 darwin
+        uses: actions/download-artifact@v4
+        with:
+          name: release-x86_64-apple-darwin
+          path: dl/x86_64
+
+      - name: Download aarch64 darwin
+        uses: actions/download-artifact@v4
+        with:
+          name: release-aarch64-apple-darwin
+          path: dl/aarch64
+
+      - name: Build universal tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${RELEASE_TAG}"
+          X86="dl/x86_64/roninKB-${TAG}-x86_64-apple-darwin.tar.gz"
+          ARM="dl/aarch64/roninKB-${TAG}-aarch64-apple-darwin.tar.gz"
+          mkdir -p extract/x86_64 extract/aarch64
+          tar -xzf "$X86" -C extract/x86_64
+          tar -xzf "$ARM" -C extract/aarch64
+
+          SRC_X="extract/x86_64/roninKB-${TAG}-x86_64-apple-darwin"
+          SRC_A="extract/aarch64/roninKB-${TAG}-aarch64-apple-darwin"
+
+          NAME="roninKB-${TAG}-universal-apple-darwin"
+          STAGE="staging/${NAME}"
+          mkdir -p "${STAGE}/bin"
+
+          lipo -create "${SRC_X}/bin/hhkb" "${SRC_A}/bin/hhkb" \
+            -output "${STAGE}/bin/hhkb"
+          lipo -create "${SRC_X}/bin/hhkb-daemon" "${SRC_A}/bin/hhkb-daemon" \
+            -output "${STAGE}/bin/hhkb-daemon"
+          chmod +x "${STAGE}/bin/hhkb" "${STAGE}/bin/hhkb-daemon"
+
+          # Copy the non-binary payload from one of the source trees.
+          cp -R "${SRC_X}/install" "${STAGE}/install"
+          [ -f "${SRC_X}/README.md" ] && cp "${SRC_X}/README.md" "${STAGE}/README.md" || true
+          [ -f "${SRC_X}/LICENSE" ]   && cp "${SRC_X}/LICENSE"   "${STAGE}/LICENSE"   || true
+
+          tar -czf "${NAME}.tar.gz" -C staging "${NAME}"
+          shasum -a 256 "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256"
+
+      - name: Upload universal artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-universal-apple-darwin
+          path: |
+            roninKB-*-universal-apple-darwin.tar.gz
+            roninKB-*-universal-apple-darwin.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: [build, universal-mac]
+    runs-on: ubuntu-latest
+    outputs:
+      release_url: ${{ steps.create.outputs.url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Assemble release notes
+        shell: bash
+        run: |
+          TAG="${RELEASE_TAG}"
+          {
+            echo "# RoninKB ${TAG}"
+            echo
+            echo "Binary release of the RoninKB HHKB configuration suite."
+            echo
+            echo "## Install"
+            echo
+            echo "### macOS (Homebrew)"
+            echo '```bash'
+            echo "brew tap kidneyweakx/roninkb https://github.com/kidneyweakx/RoninKB.git"
+            echo "brew install roninkb"
+            echo '```'
+            echo
+            echo "### macOS / Linux (curl)"
+            echo '```bash'
+            echo "curl -fsSL https://raw.githubusercontent.com/kidneyweakx/RoninKB/main/install.sh | sh"
+            echo '```'
+            echo
+            echo "### Windows (PowerShell)"
+            echo '```powershell'
+            echo "irm https://raw.githubusercontent.com/kidneyweakx/RoninKB/main/install.ps1 | iex"
+            echo '```'
+            echo
+            echo "## Checksums (sha256)"
+            echo
+            echo '```'
+            for f in dist/*.sha256; do
+              [ -f "$f" ] || continue
+              cat "$f"
+            done
+            echo '```'
+          } > RELEASE_NOTES.md
+          cat RELEASE_NOTES.md
+
+      - name: Create GitHub Release
+        id: create
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: RoninKB ${{ env.RELEASE_TAG }}
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+          files: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+            dist/*.zip
+            dist/*.zip.sha256
+
+      - name: Print release URL
+        run: echo "Released at ${{ steps.create.outputs.url }}"
+
+  update-tap:
+    name: Update Homebrew formula
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download universal mac artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-universal-apple-darwin
+          path: dl/mac
+
+      - name: Download linux x86_64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-x86_64-unknown-linux-gnu
+          path: dl/linux-x86_64
+
+      - name: Download linux aarch64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-aarch64-unknown-linux-gnu
+          path: dl/linux-aarch64
+
+      - name: Update Formula/roninkb.rb
+        shell: bash
+        env:
+          TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+
+          MAC_SHA=$(awk '{print $1}' "dl/mac/roninKB-${TAG}-universal-apple-darwin.tar.gz.sha256")
+          LX86_SHA=$(awk '{print $1}' "dl/linux-x86_64/roninKB-${TAG}-x86_64-unknown-linux-gnu.tar.gz.sha256")
+          LARM_SHA=$(awk '{print $1}' "dl/linux-aarch64/roninKB-${TAG}-aarch64-unknown-linux-gnu.tar.gz.sha256")
+
+          export VERSION MAC_SHA LX86_SHA LARM_SHA
+
+          python3 <<'PY'
+          import os, re, pathlib
+
+          version  = os.environ["VERSION"]
+          mac_sha  = os.environ["MAC_SHA"]
+          lx86_sha = os.environ["LX86_SHA"]
+          larm_sha = os.environ["LARM_SHA"]
+
+          p = pathlib.Path("Formula/roninkb.rb")
+          s = p.read_text()
+
+          # Bump the version literal.
+          s = re.sub(r'version "[^"]*"', f'version "{version}"', s, count=1)
+
+          # Replace the sha256 on the line AFTER each matching url line.
+          lines = s.splitlines()
+          out = []
+          i = 0
+          while i < len(lines):
+              line = lines[i]
+              out.append(line)
+              nxt_idx = i + 1
+              def bump(sha):
+                  nonlocal out
+                  if nxt_idx < len(lines):
+                      out.append(re.sub(r'sha256 "[^"]*"',
+                                        f'sha256 "{sha}"',
+                                        lines[nxt_idx]))
+              if "universal-apple-darwin.tar.gz" in line:
+                  bump(mac_sha); i += 2; continue
+              if "x86_64-unknown-linux-gnu.tar.gz" in line:
+                  bump(lx86_sha); i += 2; continue
+              if "aarch64-unknown-linux-gnu.tar.gz" in line:
+                  bump(larm_sha); i += 2; continue
+              i += 1
+
+          p.write_text("\n".join(out) + "\n")
+          PY
+
+          echo "--- Updated Formula/roninkb.rb ---"
+          cat Formula/roninkb.rb
+
+      - name: Commit & push formula
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet Formula/roninkb.rb; then
+            echo "Formula already up to date"
+            exit 0
+          fi
+          git add Formula/roninkb.rb
+          git commit -m "chore(formula): release ${RELEASE_TAG}"
+          git push origin main
