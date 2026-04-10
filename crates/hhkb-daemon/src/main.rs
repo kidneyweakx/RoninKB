@@ -56,13 +56,19 @@ async fn async_main() -> anyhow::Result<()> {
 }
 
 /// Tray mode: spawn axum on a worker thread, keep the main thread for the
-/// tray event loop. Menu "Quit" triggers a graceful shutdown of the server.
+/// winit event loop (required by Cocoa on macOS so that menu events are
+/// actually delivered). Menu actions trigger graceful shutdown and other
+/// behaviour via the `ApplicationHandler` impl below.
 #[cfg(feature = "tray")]
 fn tray_main() -> anyhow::Result<()> {
-    use std::time::Duration;
-
-    let tray = hhkb_daemon::tray::TrayController::new()
-        .map_err(|e| anyhow::anyhow!("tray init: {}", e))?;
+    use winit::{
+        application::ApplicationHandler,
+        event::WindowEvent,
+        event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+        window::WindowId,
+    };
+    #[cfg(target_os = "macos")]
+    use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
 
     // One-shot channel used to tell axum to exit cleanly.
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
@@ -84,30 +90,74 @@ fn tray_main() -> anyhow::Result<()> {
         })
     });
 
-    // Main-thread tray poll loop. 100 ms is fast enough that "Quit" feels
-    // instant without burning CPU. On macOS this loop still runs but the
-    // AppKit event pump isn't spinning, so menu events never arrive — the
-    // icon is effectively cosmetic there in v1 (see src/tray.rs).
-    let mut shutdown_tx = Some(shutdown_tx);
-    loop {
-        match tray.poll() {
-            hhkb_daemon::tray::TrayAction::Quit => {
-                tracing::info!("tray: quit clicked");
-                if let Some(tx) = shutdown_tx.take() {
-                    let _ = tx.send(());
-                }
-                break;
-            }
-            hhkb_daemon::tray::TrayAction::Reconnect => {
-                // TODO: plumb a broadcast channel into AppState so this can
-                // force a device reopen. For v1 the /device/* endpoints
-                // already lazily reconnect on demand.
-                tracing::info!("tray: reconnect requested (no-op in v1)");
-            }
-            hhkb_daemon::tray::TrayAction::None => {}
-        }
-        std::thread::sleep(Duration::from_millis(100));
+    // winit drives the native event loop (required for Cocoa on macOS).
+    struct TrayApp {
+        tray: hhkb_daemon::tray::TrayController,
+        shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
     }
+
+    impl ApplicationHandler for TrayApp {
+        fn resumed(&mut self, _el: &ActiveEventLoop) {}
+
+        fn window_event(
+            &mut self,
+            _el: &ActiveEventLoop,
+            _wid: WindowId,
+            _event: WindowEvent,
+        ) {
+        }
+
+        fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+            el.set_control_flow(ControlFlow::Poll);
+            std::thread::sleep(std::time::Duration::from_millis(80));
+
+            match self.tray.poll() {
+                hhkb_daemon::tray::TrayAction::Quit => {
+                    tracing::info!("tray: quit clicked");
+                    if let Some(tx) = self.shutdown_tx.take() {
+                        let _ = tx.send(());
+                    }
+                    el.exit();
+                }
+                hhkb_daemon::tray::TrayAction::OpenUi => {
+                    tracing::info!("tray: opening web UI");
+                    let _ = open::that("http://127.0.0.1:7331/ui/");
+                }
+                hhkb_daemon::tray::TrayAction::ToggleAutostart => {
+                    let enabled = hhkb_daemon::autostart::is_enabled();
+                    if enabled {
+                        if let Err(e) = hhkb_daemon::autostart::disable() {
+                            tracing::warn!("autostart disable failed: {e}");
+                        }
+                    } else if let Err(e) = hhkb_daemon::autostart::enable() {
+                        tracing::warn!("autostart enable failed: {e}");
+                    }
+                    self.tray.sync_autostart_check();
+                }
+                hhkb_daemon::tray::TrayAction::Reconnect => {
+                    tracing::info!("tray: reconnect requested (no-op in v1)");
+                }
+                hhkb_daemon::tray::TrayAction::None => {}
+            }
+        }
+    }
+
+    let tray = hhkb_daemon::tray::TrayController::new()
+        .map_err(|e| anyhow::anyhow!("tray init: {e}"))?;
+
+    // Build event loop. On macOS, Accessory policy hides the Dock icon and
+    // Cmd+Tab entry — this process should live only in the menu bar.
+    let event_loop = {
+        let mut builder = EventLoop::builder();
+        #[cfg(target_os = "macos")]
+        builder.with_activation_policy(ActivationPolicy::Accessory);
+        builder.build()?
+    };
+    let mut app = TrayApp {
+        tray,
+        shutdown_tx: Some(shutdown_tx),
+    };
+    event_loop.run_app(&mut app)?;
 
     match server_thread.join() {
         Ok(inner) => inner?,

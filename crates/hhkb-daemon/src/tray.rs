@@ -1,40 +1,42 @@
 //! System tray icon for the RoninKB daemon.
 //!
-//! Gated behind the `tray` feature flag because `tray-icon` pulls in system
-//! dependencies (AppKit on macOS, GTK on Linux, Win32 on Windows) that we
-//! don't want in headless / CI builds of the daemon.
+//! Gated behind the `tray` feature flag. Uses `winit` to drive the native
+//! event loop on all platforms (required by AppKit on macOS so that menu
+//! events are actually delivered; on Windows and Linux it is optional but
+//! keeps the code uniform).
 //!
-//! ## Platform caveats
+//! ## Menu layout
 //!
-//! * **Linux (X11/GTK)** — works out of the box with a simple polling loop;
-//!   `tray-icon` dispatches menu events through a global channel.
-//! * **Windows** — works, but the tray requires a message pump on the thread
-//!   that created the icon. We drive it from the main thread via
-//!   [`TrayController::poll`] on a timer. That's good enough for a menu with
-//!   a single "Quit" item.
-//! * **macOS** — the icon *appears* but menu events are only delivered when a
-//!   Cocoa `NSApplication` run loop is pumping them. We don't start one (that
-//!   would require `tao`/`winit` and significantly more code), so on macOS the
-//!   tray is effectively cosmetic in v1: the icon shows up, but clicking
-//!   "Quit" won't trigger a shutdown. Users can still `Ctrl+C` or `launchctl
-//!   unload` the LaunchAgent. The code path *compiles* and *runs* without
-//!   panicking so we can ship a single binary.
-//!
-//! None of this matters for tests — the whole module is `#![cfg(feature =
-//! "tray")]`, and tests run without the feature.
+//! ```text
+//! RoninKB Daemon          ← disabled header
+//! ─────────────────────
+//! Open Web UI             ← opens http://127.0.0.1:7331/ui/
+//! ─────────────────────
+//! ✓ Launch at Login       ← CheckMenuItem, toggles autostart
+//! ─────────────────────
+//! Reconnect Device
+//! ─────────────────────
+//! Quit RoninKB Daemon
+//! ```
 
 #![cfg(feature = "tray")]
 
 use tray_icon::{
-    menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem},
     TrayIcon, TrayIconBuilder,
 };
+
+use crate::autostart;
 
 /// Actions the tray menu can request of the main loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayAction {
     /// No pending event.
     None,
+    /// User asked to open the web UI.
+    OpenUi,
+    /// User asked to toggle the login-item / autostart entry.
+    ToggleAutostart,
     /// User asked to reconnect the keyboard.
     Reconnect,
     /// User asked to quit the daemon.
@@ -44,24 +46,47 @@ pub enum TrayAction {
 /// Owns the tray icon and the menu item IDs we care about. Dropping this
 /// value removes the icon from the tray.
 pub struct TrayController {
-    // Kept alive so the icon isn't dropped. We don't read the field.
+    // Kept alive so the icon is not dropped.
     _tray: TrayIcon,
-    quit_id: MenuId,
+    open_ui_id: MenuId,
+    autostart_id: MenuId,
     reconnect_id: MenuId,
+    quit_id: MenuId,
+    /// The CheckMenuItem handle — we need it to flip the checked state.
+    autostart_item: CheckMenuItem,
 }
 
 impl TrayController {
-    /// Build the tray icon, menu, and return a handle. The caller is
-    /// responsible for driving [`poll`](Self::poll) on the main thread.
+    /// Build the tray icon + menu. Must be called on the main thread (AppKit
+    /// requirement on macOS).
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let menu = Menu::new();
-        let header = MenuItem::new("RoninKB Daemon", false, None);
-        let reconnect = MenuItem::new("Reconnect Device", true, None);
-        let quit = MenuItem::new("Quit RoninKB Daemon", true, None);
-        let sep_a = PredefinedMenuItem::separator();
-        let sep_b = PredefinedMenuItem::separator();
-        menu.append_items(&[&header, &sep_a, &reconnect, &sep_b, &quit])?;
 
+        let header = MenuItem::new("RoninKB Daemon", false, None);
+        let sep_a = PredefinedMenuItem::separator();
+        let open_ui = MenuItem::new("Open Web UI", true, None);
+        let sep_b = PredefinedMenuItem::separator();
+        let autostart_enabled = autostart::is_enabled();
+        let autostart = CheckMenuItem::new("Launch at Login", true, autostart_enabled, None);
+        let sep_c = PredefinedMenuItem::separator();
+        let reconnect = MenuItem::new("Reconnect Device", true, None);
+        let sep_d = PredefinedMenuItem::separator();
+        let quit = MenuItem::new("Quit RoninKB Daemon", true, None);
+
+        menu.append_items(&[
+            &header,
+            &sep_a,
+            &open_ui,
+            &sep_b,
+            &autostart,
+            &sep_c,
+            &reconnect,
+            &sep_d,
+            &quit,
+        ])?;
+
+        let open_ui_id = open_ui.id().clone();
+        let autostart_id = autostart.id().clone();
         let reconnect_id = reconnect.id().clone();
         let quit_id = quit.id().clone();
 
@@ -76,17 +101,26 @@ impl TrayController {
 
         Ok(Self {
             _tray: tray,
-            quit_id,
+            open_ui_id,
+            autostart_id,
             reconnect_id,
+            quit_id,
+            autostart_item: autostart,
         })
     }
 
-    /// Drain one pending menu event, if any. Returns
-    /// [`TrayAction::None`] when the queue is empty.
+    /// Drain one pending menu event. Returns [`TrayAction::None`] when the
+    /// queue is empty.
     pub fn poll(&self) -> TrayAction {
         if let Ok(event) = MenuEvent::receiver().try_recv() {
             if event.id == self.quit_id {
                 return TrayAction::Quit;
+            }
+            if event.id == self.open_ui_id {
+                return TrayAction::OpenUi;
+            }
+            if event.id == self.autostart_id {
+                return TrayAction::ToggleAutostart;
             }
             if event.id == self.reconnect_id {
                 return TrayAction::Reconnect;
@@ -94,10 +128,15 @@ impl TrayController {
         }
         TrayAction::None
     }
+
+    /// Flip the checked state of the "Launch at Login" menu item to match the
+    /// actual autostart registration state.
+    pub fn sync_autostart_check(&self) {
+        self.autostart_item.set_checked(autostart::is_enabled());
+    }
 }
 
-/// Decode an embedded PNG into an RGBA8 byte buffer suitable for
-/// [`tray_icon::Icon::from_rgba`].
+/// Decode an embedded PNG into an RGBA8 byte buffer.
 fn decode_rgba(png_bytes: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let img = image::load_from_memory(png_bytes)?;
     let rgba = img.to_rgba8();

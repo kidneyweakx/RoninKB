@@ -111,8 +111,10 @@ pub fn confirm_keymap() -> [u8; 65] {
 }
 
 /// Reset all DIP switches to their default state.
+///
+/// Vendor reference (`hhkb_reset_dipsw`) sets `buf[4]=0, buf[5]=1`.
 pub fn reset_dipsw() -> [u8; 65] {
-    protocol::build_request(CMD_RESET_DIPSW, &[])
+    protocol::build_request(CMD_RESET_DIPSW, &[0x00, 0x01])
 }
 
 // ---------------------------------------------------------------------------

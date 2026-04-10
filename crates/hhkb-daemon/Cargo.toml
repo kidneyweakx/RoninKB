@@ -38,6 +38,8 @@ arboard = { version = "3", optional = true }
 # -- System tray (opt-in) --------------------------------------------------
 tray-icon = { version = "0.21", optional = true }
 image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
+winit = { version = "0.30", optional = true }
+open = { version = "5", optional = true }
 # -- Embedded UI (opt-in) --------------------------------------------------
 # Bakes the compiled hhkb-app static bundle into the daemon binary so users
 # get a single-binary install with a browser UI at /ui.
@@ -52,7 +54,7 @@ clipboard = ["dep:arboard"]
 # runs interactively. macOS/Windows require the main thread to drive a
 # Cocoa/Win32 event loop; the Linux path uses GTK under the hood. See
 # `src/tray.rs` and `src/main.rs` for the runtime caveats.
-tray = ["dep:tray-icon", "dep:image"]
+tray = ["dep:tray-icon", "dep:image", "dep:winit", "dep:open"]
 # Embed the hhkb-app React frontend from `apps/hhkb-app/dist` directly into
 # the binary. The frontend MUST be built (`npm run build`) before `cargo build`
 # runs; `build.rs` enforces this at compile time.
@@ -60,6 +62,9 @@ embedded-ui = ["dep:rust-embed", "dep:mime_guess"]
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["signal"] }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
 
 [dev-dependencies]
 http-body-util = "0.1"

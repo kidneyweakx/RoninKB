@@ -3,6 +3,7 @@
 //! Exposes the HTTP+WebSocket router and application state so that both the
 //! `main.rs` binary and the integration tests can reuse the same code paths.
 
+pub mod autostart;
 pub mod db;
 pub mod error;
 pub mod flow;
