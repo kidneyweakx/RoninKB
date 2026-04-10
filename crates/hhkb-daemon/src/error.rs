@@ -42,6 +42,10 @@ pub enum ApiError {
 
     #[error("kanata io error: {0}")]
     KanataIo(#[from] std::io::Error),
+
+    // -- Flow (cross-device clipboard sync) --------------------------------
+    #[error("Flow error: {0}")]
+    Flow(#[from] crate::flow::FlowError),
 }
 
 impl From<anyhow::Error> for ApiError {
@@ -72,6 +76,17 @@ impl IntoResponse for ApiError {
             ApiError::KanataAlreadyRunning => (StatusCode::CONFLICT, "kanata_already_running"),
             ApiError::KanataNotRunning => (StatusCode::CONFLICT, "kanata_not_running"),
             ApiError::KanataIo(_) => (StatusCode::INTERNAL_SERVER_ERROR, "kanata_io_error"),
+            ApiError::Flow(e) => match e {
+                crate::flow::FlowError::Disabled => {
+                    (StatusCode::SERVICE_UNAVAILABLE, "flow_disabled")
+                }
+                crate::flow::FlowError::Mdns(_) => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, "flow_mdns_error")
+                }
+                crate::flow::FlowError::PeerUnreachable(_) => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, "flow_peer_unreachable")
+                }
+            },
         };
 
         let body = Json(json!({

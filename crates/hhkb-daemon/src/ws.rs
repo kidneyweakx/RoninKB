@@ -24,16 +24,37 @@ use crate::state::AppState;
 pub enum DaemonEvent {
     DeviceConnected,
     DeviceDisconnected,
-    ProfileChanged { id: String },
-    KanataStarted { pid: u32 },
+    ProfileChanged {
+        id: String,
+    },
+    KanataStarted {
+        pid: u32,
+    },
     KanataStopped,
-    KanataReloaded { profile_id: String },
+    KanataReloaded {
+        profile_id: String,
+    },
+    // -- Flow (cross-device clipboard sync) --------------------------------
+    #[serde(rename = "flow_peer_discovered")]
+    FlowPeerDiscovered {
+        peer: crate::flow::FlowPeer,
+    },
+    #[serde(rename = "flow_peer_lost")]
+    FlowPeerLost {
+        peer_id: uuid::Uuid,
+    },
+    #[serde(rename = "flow_synced")]
+    FlowSynced {
+        entry_id: uuid::Uuid,
+        source: crate::flow::FlowSource,
+    },
+    #[serde(rename = "flow_enabled")]
+    FlowEnabled,
+    #[serde(rename = "flow_disabled")]
+    FlowDisabled,
 }
 
-pub async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 

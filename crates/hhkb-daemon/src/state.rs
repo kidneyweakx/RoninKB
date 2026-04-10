@@ -16,6 +16,7 @@ use hhkb_core::transport::HidApiTransport;
 
 use crate::db;
 use crate::error::{ApiError, ApiResult};
+use crate::flow::FlowManager;
 use crate::kanata::KanataManager;
 use crate::ws::DaemonEvent;
 
@@ -31,6 +32,9 @@ pub struct AppState {
     /// if the kanata binary isn't installed the manager simply reports
     /// `NotInstalled` and refuses start/stop/reload.
     pub kanata: Arc<KanataManager>,
+    /// Flow (cross-device clipboard sync) manager. Not enabled by default;
+    /// the caller must POST `/flow/enable` to start it.
+    pub flow: Arc<FlowManager>,
     /// Disables auto-reconnect attempts. Tests set this so they don't
     /// accidentally open a real keyboard attached to the developer's machine.
     pub auto_reconnect: bool,
@@ -68,21 +72,20 @@ impl AppState {
 
         let (events, _) = broadcast::channel(64);
 
-        let kanata = KanataManager::new()
-            .map(Arc::new)
-            .unwrap_or_else(|e| {
-                tracing::warn!(%e, "kanata manager init failed; using disabled stub");
-                Arc::new(KanataManager::with_paths(
-                    None,
-                    std::env::temp_dir().join("roninKB-kanata-disabled.kbd"),
-                ))
-            });
+        let kanata = KanataManager::new().map(Arc::new).unwrap_or_else(|e| {
+            tracing::warn!(%e, "kanata manager init failed; using disabled stub");
+            Arc::new(KanataManager::with_paths(
+                None,
+                std::env::temp_dir().join("roninKB-kanata-disabled.kbd"),
+            ))
+        });
 
         Ok(Self {
             device: Arc::new(Mutex::new(device)),
             db: Arc::new(Mutex::new(conn)),
             events,
             kanata,
+            flow: Arc::new(FlowManager::new()),
             auto_reconnect: true,
         })
     }
@@ -106,6 +109,7 @@ impl AppState {
             db: Arc::new(Mutex::new(conn)),
             events,
             kanata,
+            flow: Arc::new(FlowManager::new()),
             auto_reconnect: false,
         }
     }

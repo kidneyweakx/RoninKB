@@ -136,7 +136,12 @@ async fn profile_crud_roundtrip() {
     // -- Initially empty list --
     let resp = app
         .clone()
-        .oneshot(Request::builder().uri("/profiles").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/profiles")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -162,12 +167,21 @@ async fn profile_crud_roundtrip() {
     let id = created["id"].as_str().unwrap().to_string();
     assert_eq!(created["name"], "Daily Driver");
     assert_eq!(created["via"]["name"], "Daily Driver");
-    assert!(created["tags"].as_array().unwrap().iter().any(|t| t == "work"));
+    assert!(created["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|t| t == "work"));
 
     // -- List: should have 1 --
     let resp = app
         .clone()
-        .oneshot(Request::builder().uri("/profiles").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/profiles")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     let body = body_to_json(resp).await;
@@ -255,7 +269,12 @@ async fn profile_crud_roundtrip() {
 
     // -- List empty again --
     let resp = app
-        .oneshot(Request::builder().uri("/profiles").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/profiles")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     let body = body_to_json(resp).await;

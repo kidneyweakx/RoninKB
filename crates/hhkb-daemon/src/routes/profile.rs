@@ -65,7 +65,9 @@ pub async fn update(
     let conn = state.db.lock().await;
     let rec = db::update_profile(&conn, &id, body)?;
     drop(conn);
-    let _ = state.events.send(DaemonEvent::ProfileChanged { id: rec.id.clone() });
+    let _ = state
+        .events
+        .send(DaemonEvent::ProfileChanged { id: rec.id.clone() });
     Ok(Json(rec))
 }
 
@@ -102,17 +104,16 @@ pub async fn set_active(
             .map(|sw| sw.config.clone())
     };
 
-    let _ = state
-        .events
-        .send(DaemonEvent::ProfileChanged { id: body.id.clone() });
+    let _ = state.events.send(DaemonEvent::ProfileChanged {
+        id: body.id.clone(),
+    });
 
     // If the profile carries a kanata config, persist it on disk. Only
     // hot-reload if kanata is actually running — otherwise the file is
     // updated and the next start() picks it up.
     if let Some(cfg) = kanata_config {
         let kanata = state.kanata.clone();
-        let was_running =
-            matches!(kanata.check_alive(), KanataStatus::Running { .. });
+        let was_running = matches!(kanata.check_alive(), KanataStatus::Running { .. });
         let reload_result = tokio::task::spawn_blocking(move || {
             if was_running {
                 kanata.reload(&cfg)

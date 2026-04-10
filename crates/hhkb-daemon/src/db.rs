@@ -132,11 +132,7 @@ pub fn list_profiles(conn: &Connection) -> ApiResult<Vec<ProfileRecord>> {
 }
 
 /// Update a profile by id. The VIA JSON is replaced wholesale.
-pub fn update_profile(
-    conn: &Connection,
-    id: &str,
-    via: ViaProfile,
-) -> ApiResult<ProfileRecord> {
+pub fn update_profile(conn: &Connection, id: &str, via: ViaProfile) -> ApiResult<ProfileRecord> {
     // Ensure the row exists first so we return 404 (not a silent no-op).
     let _existing = get_profile(conn, id)?;
 
@@ -217,11 +213,7 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProfileRecord> {
     let updated_at: i64 = row.get(5)?;
 
     let via: ViaProfile = serde_json::from_str(&via_json).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(
-            2,
-            rusqlite::types::Type::Text,
-            Box::new(e),
-        )
+        rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e))
     })?;
 
     let tags = tags_str

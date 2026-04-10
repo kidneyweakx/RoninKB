@@ -286,7 +286,10 @@ fn detect_kanata_binary() -> Option<PathBuf> {
         return Some(p);
     }
     if let Some(home) = std::env::var_os("HOME") {
-        let cargo_bin = PathBuf::from(home).join(".cargo").join("bin").join("kanata");
+        let cargo_bin = PathBuf::from(home)
+            .join(".cargo")
+            .join("bin")
+            .join("kanata");
         if cargo_bin.is_file() {
             return Some(cargo_bin);
         }

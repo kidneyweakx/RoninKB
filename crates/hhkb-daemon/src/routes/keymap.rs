@@ -6,7 +6,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use hhkb_core::{Keymap, KeyboardMode};
+use hhkb_core::{KeyboardMode, Keymap};
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
