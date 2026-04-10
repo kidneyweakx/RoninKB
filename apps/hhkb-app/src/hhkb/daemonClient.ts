@@ -258,6 +258,57 @@ export class DaemonClient {
       },
     );
   }
+
+  /**
+   * HHKB keyboard mode is controlled by the physical DIP switches (SW1/SW2);
+   * there is no firmware command to set it from software. This stub exists
+   * so the UI can optimistically update its local mode preference without a
+   * daemon round-trip. Callers must also update `useDeviceStore.mode`
+   * directly for the keymap view to switch.
+   */
+  async setMode(_mode: string): Promise<void> {
+    return;
+  }
+
+  // -------------------------------------------------------------------------
+  // Kanata supervisor
+  // -------------------------------------------------------------------------
+
+  async kanataStatus(): Promise<KanataStatus> {
+    const raw = await requestJson<{
+      installed: boolean;
+      config_path?: string;
+      state?: string;
+      pid?: number;
+    }>(`${this.baseUrl}/kanata/status`);
+    return {
+      installed: raw.installed,
+      path: raw.config_path,
+      state: raw.state,
+      pid: raw.pid,
+    };
+  }
+
+  /**
+   * Hot-reload kanata with a new config. The daemon writes `config` to its
+   * managed `.kbd` file and signals the running child (SIGUSR1 on unix,
+   * restart on windows). Safe to call when kanata is stopped — the config
+   * is just written for next start.
+   */
+  async kanataReload(config: string): Promise<void> {
+    await requestJson<unknown>(`${this.baseUrl}/kanata/reload`, {
+      method: 'POST',
+      body: JSON.stringify({ config }),
+    });
+  }
+}
+
+export interface KanataStatus {
+  installed: boolean;
+  path?: string;
+  version?: string;
+  state?: string;
+  pid?: number;
 }
 
 // ---------------------------------------------------------------------------

@@ -2,9 +2,8 @@
 target/
 Cargo.lock
 
-# Packet captures (large binary files)
-spec/captures/sessions/**/*.pcapng
-spec/captures/sessions/**/*.pcap
+# Research notes (local only, not versioned)
+spec/
 
 # Vendor reference (cloned repos, not committed)
 vendor-reference/
@@ -24,3 +23,5 @@ Thumbs.db
 .env
 .env.*
 
+# Playwright Debugging
+.playwright-mcp/

@@ -46,6 +46,8 @@ interface DeviceState {
   setKeyOverride: (index: number, value: number, layer: 'base' | 'fn') => void;
   /** Derived: which transport is currently serving the keyboard. */
   transportMode: () => TransportMode;
+  /** Write the currently-held base+fn keymaps through the daemon proxy. */
+  writeKeymaps: () => Promise<void>;
 }
 
 export const useDeviceStore = create<DeviceState>((set, get) => ({
@@ -184,5 +186,20 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
     next.set(index, value);
     if (layer === 'base') set({ baseKeymap: next });
     else set({ fnKeymap: next });
+  },
+
+  async writeKeymaps() {
+    const { baseKeymap, fnKeymap, mode } = get();
+    const client = useDaemonStore.getState().client;
+    if (!client) {
+      throw new Error('Daemon offline — cannot flash keymaps');
+    }
+    const label = keyboardModeLabel(mode).toLowerCase();
+    if (baseKeymap) {
+      await client.writeKeymap(label, false, Array.from(baseKeymap.asBytes()));
+    }
+    if (fnKeymap) {
+      await client.writeKeymap(label, true, Array.from(fnKeymap.asBytes()));
+    }
   },
 }));
