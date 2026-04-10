@@ -92,6 +92,124 @@ impl HidTransport for MockTransport {
 }
 
 // ---------------------------------------------------------------------------
+// HidApiTransport (real backend, behind feature flag)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "hidapi-backend")]
+mod hidapi_impl {
+    use super::*;
+    use crate::types::{HHKB_PRODUCT_IDS, HHKB_VENDOR_ID, VENDOR_INTERFACE};
+    use hidapi::{HidApi, HidDevice};
+
+    /// Real HID transport backed by the `hidapi` crate.
+    ///
+    /// Talks to the HHKB vendor-specific HID interface (interface 2).
+    /// Construct via [`HidApiTransport::open`] which auto-discovers the
+    /// first attached HHKB device with a known PID.
+    pub struct HidApiTransport {
+        device: HidDevice,
+    }
+
+    impl HidApiTransport {
+        /// Open the first HHKB device found on the system, on the vendor
+        /// HID interface (`VENDOR_INTERFACE = 2`).
+        ///
+        /// Returns [`Error::DeviceNotFound`] if no matching device exists.
+        pub fn open() -> Result<Self> {
+            let api = HidApi::new()
+                .map_err(|e| Error::Transport(format!("hidapi init: {e}")))?;
+
+            for info in api.device_list() {
+                if info.vendor_id() != HHKB_VENDOR_ID {
+                    continue;
+                }
+                if !HHKB_PRODUCT_IDS.contains(&info.product_id()) {
+                    continue;
+                }
+                if info.interface_number() != VENDOR_INTERFACE {
+                    continue;
+                }
+                let device = api
+                    .open_path(info.path())
+                    .map_err(|e| Error::Transport(format!("hidapi open: {e}")))?;
+                return Ok(Self { device });
+            }
+
+            Err(Error::DeviceNotFound {
+                vid: HHKB_VENDOR_ID,
+                pid: HHKB_PRODUCT_IDS[0],
+            })
+        }
+
+        /// Open a specific device by hidapi path (for picking among multiple).
+        pub fn open_path(path: &std::ffi::CStr) -> Result<Self> {
+            let api = HidApi::new()
+                .map_err(|e| Error::Transport(format!("hidapi init: {e}")))?;
+            let device = api
+                .open_path(path)
+                .map_err(|e| Error::Transport(format!("hidapi open: {e}")))?;
+            Ok(Self { device })
+        }
+
+        /// List all attached HHKB devices on the vendor interface.
+        /// Returns a vector of (path, product_id, manufacturer, product) tuples.
+        pub fn list() -> Result<Vec<HhkbDeviceInfo>> {
+            let api = HidApi::new()
+                .map_err(|e| Error::Transport(format!("hidapi init: {e}")))?;
+            let mut out = Vec::new();
+            for info in api.device_list() {
+                if info.vendor_id() != HHKB_VENDOR_ID {
+                    continue;
+                }
+                if !HHKB_PRODUCT_IDS.contains(&info.product_id()) {
+                    continue;
+                }
+                if info.interface_number() != VENDOR_INTERFACE {
+                    continue;
+                }
+                out.push(HhkbDeviceInfo {
+                    path: info.path().to_owned(),
+                    vendor_id: info.vendor_id(),
+                    product_id: info.product_id(),
+                    manufacturer: info.manufacturer_string().unwrap_or("").to_string(),
+                    product: info.product_string().unwrap_or("").to_string(),
+                    serial: info.serial_number().unwrap_or("").to_string(),
+                });
+            }
+            Ok(out)
+        }
+    }
+
+    /// Lightweight description of an attached HHKB device.
+    #[derive(Debug, Clone)]
+    pub struct HhkbDeviceInfo {
+        pub path: std::ffi::CString,
+        pub vendor_id: u16,
+        pub product_id: u16,
+        pub manufacturer: String,
+        pub product: String,
+        pub serial: String,
+    }
+
+    impl HidTransport for HidApiTransport {
+        fn write(&self, data: &[u8]) -> Result<usize> {
+            self.device
+                .write(data)
+                .map_err(|e| Error::Transport(format!("hidapi write: {e}")))
+        }
+
+        fn read(&self, buf: &mut [u8], timeout_ms: i32) -> Result<usize> {
+            self.device
+                .read_timeout(buf, timeout_ms)
+                .map_err(|e| Error::Transport(format!("hidapi read: {e}")))
+        }
+    }
+}
+
+#[cfg(feature = "hidapi-backend")]
+pub use hidapi_impl::{HhkbDeviceInfo, HidApiTransport};
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
