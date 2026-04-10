@@ -15,3 +15,7 @@ hidapi = { version = "2", optional = true }
 [features]
 default = []
 hidapi-backend = ["dep:hidapi"]
+# DANGEROUS: enables firmware-write commands on HhkbDevice.
+# Misuse can BRICK the keyboard. Do not enable unless you fully understand
+# the HHKB firmware update protocol.
+firmware-write = []

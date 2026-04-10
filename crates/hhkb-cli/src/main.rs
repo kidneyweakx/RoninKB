@@ -302,8 +302,7 @@ mod tests {
 
     #[test]
     fn parses_write_keymap_fn_layer() {
-        let cli =
-            Cli::try_parse_from(["hhkb", "write-keymap", "profile.json", "--fn"]).unwrap();
+        let cli = Cli::try_parse_from(["hhkb", "write-keymap", "profile.json", "--fn"]).unwrap();
         match cli.command {
             Command::WriteKeymap {
                 file,
@@ -432,14 +431,8 @@ mod tests {
 
     #[test]
     fn parses_discover_keymap_table_with_flags() {
-        let cli = Cli::try_parse_from([
-            "hhkb",
-            "discover-keymap-table",
-            "--mode",
-            "lite",
-            "--fn",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["hhkb", "discover-keymap-table", "--mode", "lite", "--fn"])
+            .unwrap();
         match cli.command {
             Command::DiscoverKeymapTable { mode, fn_layer } => {
                 assert_eq!(mode, ModeArg::Lite);

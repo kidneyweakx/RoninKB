@@ -49,11 +49,7 @@ pub struct ViaProfile {
     pub keycodes: Vec<String>,
 
     /// RoninKB extension — `None` for pure VIA files.
-    #[serde(
-        rename = "_roninKB",
-        skip_serializing_if = "Option::is_none",
-        default
-    )]
+    #[serde(rename = "_roninKB", skip_serializing_if = "Option::is_none", default)]
     pub ronin: Option<RoninExtension>,
 }
 
@@ -235,10 +231,7 @@ mod tests {
 
         assert!(profile.has_ronin_extension());
         assert_eq!(profile.name, "HHKB Professional Hybrid");
-        assert_eq!(
-            profile.matrix,
-            Some(Matrix { rows: 8, cols: 8 })
-        );
+        assert_eq!(profile.matrix, Some(Matrix { rows: 8, cols: 8 }));
 
         let ronin = profile.ronin.as_ref().unwrap();
         assert_eq!(ronin.version, "1.0");
@@ -387,8 +380,7 @@ mod tests {
         assert!(!json.contains("r#fn"));
         assert!(json.contains("\"base\""));
 
-        let decoded: RawLayers =
-            serde_json::from_str(&json).expect("deserialize raw layers");
+        let decoded: RawLayers = serde_json::from_str(&json).expect("deserialize raw layers");
         assert_eq!(decoded, raw);
 
         // And the same through a full HardwareConfig.

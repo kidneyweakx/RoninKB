@@ -21,6 +21,18 @@ pub const CMD_GET_KEYBOARD_MODE: u8 = 0x06;
 pub const CMD_RESET_DIPSW: u8 = 0x07;
 pub const CMD_SET_KEYMAP: u8 = 0x86;
 pub const CMD_GET_KEYMAP: u8 = 0x87;
+pub const CMD_DUMP_FIRMWARE: u8 = 0xD0;
+pub const CMD_FIRMUP_MODE_CHANGE: u8 = 0xE0;
+pub const CMD_FIRMUP_START: u8 = 0xE1;
+pub const CMD_FIRMUP_SEND: u8 = 0xE2;
+pub const CMD_FIRMUP_END: u8 = 0xE3;
+
+/// Maximum firmware payload bytes that fit in a single `FirmupSend` packet.
+///
+/// Matches the happy-hacking-gnu reference implementation: the writer packs
+/// 57 data bytes starting at `buf[8]`, leaving `buf[5]` for the length marker
+/// and `buf[6..8]` for the 16-bit packet number.
+pub const FIRMUP_SEND_CHUNK_MAX: usize = 57;
 
 // ---------------------------------------------------------------------------
 // Request builders
@@ -65,11 +77,7 @@ pub fn get_keymap(mode: KeyboardMode, fn_layer: bool) -> [u8; 65] {
 /// First of three writes that upload a full 128-byte keymap payload.
 ///
 /// Packs 57 bytes of keymap data into buf[8..65].
-pub fn set_keymap_write1(
-    mode: KeyboardMode,
-    fn_layer: bool,
-    data: &[u8; 57],
-) -> [u8; 65] {
+pub fn set_keymap_write1(mode: KeyboardMode, fn_layer: bool, data: &[u8; 57]) -> [u8; 65] {
     let mut params = [0u8; 61];
     params[0] = 65; // total offset written so far (including header)
     params[1] = 59; // number of keymap bytes in this packet (header + data)
@@ -105,6 +113,92 @@ pub fn confirm_keymap() -> [u8; 65] {
 /// Reset all DIP switches to their default state.
 pub fn reset_dipsw() -> [u8; 65] {
     protocol::build_request(CMD_RESET_DIPSW, &[])
+}
+
+// ---------------------------------------------------------------------------
+// Firmware commands
+// ---------------------------------------------------------------------------
+
+/// Build a `DumpFirmware` (0xD0) request.
+///
+/// The request body is empty; the keyboard replies with a stream of 64-byte
+/// response packets where `resp[5]` encodes `payload_len + 2` and the actual
+/// firmware bytes live at `resp[8..8 + (resp[5] - 2)]`. Reads terminate once
+/// a short packet (`resp[5] < 58`) is observed.
+///
+/// Safe read-only operation.
+pub fn dump_firmware() -> [u8; 65] {
+    protocol::build_request(CMD_DUMP_FIRMWARE, &[])
+}
+
+/// Build a `FirmupModeChange` (0xE0) request.
+///
+/// **DANGER**: sending this puts the keyboard into firmware update mode and
+/// causes the device to disconnect. Only use as part of a full firmware
+/// update sequence.
+pub fn firmup_mode_change() -> [u8; 65] {
+    protocol::build_request(CMD_FIRMUP_MODE_CHANGE, &[])
+}
+
+/// Build a `FirmupStart` (0xE1) request.
+///
+/// Byte layout (matches happy-hacking-gnu `hhkb_firmup_start`):
+/// - `[3]`     = `0xE1`
+/// - `[4]`     = `0x00`
+/// - `[5]`     = `0x08`  (length marker: 4 bytes size + 2 bytes CRC + padding)
+/// - `[6..10]` = firmware size, little-endian `u32`
+/// - `[10..12]`= CRC-16 of firmware file, little-endian
+///
+/// **DANGER**: only call after `FirmupModeChange` has succeeded and the
+/// device has re-enumerated.
+pub fn firmup_start(file_size: u32, crc16: u16) -> [u8; 65] {
+    // params start at buf[4] — we need [4]=0, [5]=8, [6..10]=size, [10..12]=crc.
+    let mut params = [0u8; 8];
+    params[0] = 0x00; // buf[4] — unknown, C ref leaves it zero
+    params[1] = 0x08; // buf[5] — fixed length marker
+    params[2..6].copy_from_slice(&file_size.to_le_bytes()); // buf[6..10]
+    params[6..8].copy_from_slice(&crc16.to_le_bytes()); // buf[10..12]
+    protocol::build_request(CMD_FIRMUP_START, &params)
+}
+
+/// Build a `FirmupSend` (0xE2) request for one firmware chunk.
+///
+/// Byte layout (matches happy-hacking-gnu `hhkb_firmup_send`):
+/// - `[3]`         = `0xE2`
+/// - `[4]`         = `0x00`
+/// - `[5]`         = `chunk.len() + 2`          (length marker)
+/// - `[6..8]`      = `packet_num` little-endian `u16`
+/// - `[8..8+len]`  = firmware data bytes
+///
+/// # Panics
+///
+/// Panics if `chunk.len() > FIRMUP_SEND_CHUNK_MAX` (57 bytes).
+pub fn firmup_send(packet_num: u16, chunk: &[u8]) -> [u8; 65] {
+    assert!(
+        chunk.len() <= FIRMUP_SEND_CHUNK_MAX,
+        "firmup_send chunk too large: max {} bytes, got {}",
+        FIRMUP_SEND_CHUNK_MAX,
+        chunk.len()
+    );
+
+    // params cover buf[4..4+params.len()] — we need:
+    //   buf[4] = 0  (offset 0 in params)
+    //   buf[5] = len+2 (offset 1)
+    //   buf[6..8] = packet_num LE (offsets 2..4)
+    //   buf[8..8+len] = chunk (offsets 4..4+len)
+    let mut params = [0u8; 4 + FIRMUP_SEND_CHUNK_MAX];
+    params[0] = 0x00;
+    params[1] = (chunk.len() as u8).wrapping_add(2);
+    params[2..4].copy_from_slice(&packet_num.to_le_bytes());
+    params[4..4 + chunk.len()].copy_from_slice(chunk);
+    protocol::build_request(CMD_FIRMUP_SEND, &params[..4 + chunk.len()])
+}
+
+/// Build a `FirmupEnd` (0xE3) request. Body is empty.
+///
+/// **DANGER**: marks the firmware stream complete and commits the update.
+pub fn firmup_end() -> [u8; 65] {
+    protocol::build_request(CMD_FIRMUP_END, &[])
 }
 
 // ---------------------------------------------------------------------------
@@ -300,10 +394,109 @@ mod tests {
     fn test_parse_dip_switch() {
         let resp = make_response(vec![0, 1, 0, 1, 0, 0]);
         let state = parse_dip_switch(&resp).unwrap();
-        assert_eq!(
-            state.switches,
-            [false, true, false, true, false, false]
-        );
+        assert_eq!(state.switches, [false, true, false, true, false, false]);
+    }
+
+    // -- Firmware command builders ------------------------------------------
+
+    #[test]
+    fn test_dump_firmware_request_bytes() {
+        let req = dump_firmware();
+        assert_eq!(req[0], 0x00);
+        assert_eq!(req[1], 0xAA);
+        assert_eq!(req[2], 0xAA);
+        assert_eq!(req[3], CMD_DUMP_FIRMWARE);
+        assert_eq!(req[3], 0xD0);
+        // Body is empty — everything after the cmd byte must be zero.
+        for &b in &req[4..] {
+            assert_eq!(b, 0x00);
+        }
+    }
+
+    #[test]
+    fn test_firmup_mode_change_request_bytes() {
+        let req = firmup_mode_change();
+        assert_eq!(req[1], 0xAA);
+        assert_eq!(req[2], 0xAA);
+        assert_eq!(req[3], CMD_FIRMUP_MODE_CHANGE);
+        assert_eq!(req[3], 0xE0);
+        for &b in &req[4..] {
+            assert_eq!(b, 0x00);
+        }
+    }
+
+    #[test]
+    fn test_firmup_start_request_bytes() {
+        // file_size = 0x0001_2345, crc16 = 0xBEEF
+        let file_size: u32 = 0x0001_2345;
+        let crc16: u16 = 0xBEEF;
+        let req = firmup_start(file_size, crc16);
+
+        assert_eq!(req[3], CMD_FIRMUP_START);
+        assert_eq!(req[3], 0xE1);
+        assert_eq!(req[4], 0x00);
+        assert_eq!(req[5], 0x08);
+        // file_size LE at [6..10]
+        assert_eq!(&req[6..10], &file_size.to_le_bytes());
+        // crc16 LE at [10..12]
+        assert_eq!(&req[10..12], &crc16.to_le_bytes());
+        // Remaining bytes zero.
+        for &b in &req[12..] {
+            assert_eq!(b, 0x00);
+        }
+    }
+
+    #[test]
+    fn test_firmup_send_with_data() {
+        // Pack 32 bytes with a recognizable pattern.
+        let mut chunk = [0u8; 32];
+        for (i, b) in chunk.iter_mut().enumerate() {
+            *b = (i as u8) ^ 0x5A;
+        }
+        let packet_num: u16 = 0x1234;
+        let req = firmup_send(packet_num, &chunk);
+
+        assert_eq!(req[3], CMD_FIRMUP_SEND);
+        assert_eq!(req[3], 0xE2);
+        assert_eq!(req[4], 0x00);
+        // length marker = chunk_len + 2
+        assert_eq!(req[5], 32 + 2);
+        // packet number LE at [6..8]
+        assert_eq!(&req[6..8], &packet_num.to_le_bytes());
+        // data at [8..8+32]
+        assert_eq!(&req[8..8 + 32], &chunk[..]);
+        // Nothing leaking beyond the chunk.
+        for &b in &req[8 + 32..] {
+            assert_eq!(b, 0x00);
+        }
+    }
+
+    #[test]
+    fn test_firmup_send_max_chunk() {
+        // Largest valid chunk — 57 bytes.
+        let chunk = [0xABu8; FIRMUP_SEND_CHUNK_MAX];
+        let req = firmup_send(0, &chunk);
+        assert_eq!(req[5], FIRMUP_SEND_CHUNK_MAX as u8 + 2);
+        assert_eq!(&req[8..8 + FIRMUP_SEND_CHUNK_MAX], &chunk[..]);
+    }
+
+    #[test]
+    #[should_panic(expected = "firmup_send chunk too large")]
+    fn test_firmup_send_oversized_panics() {
+        let chunk = [0u8; FIRMUP_SEND_CHUNK_MAX + 1];
+        let _ = firmup_send(0, &chunk);
+    }
+
+    #[test]
+    fn test_firmup_end_request_bytes() {
+        let req = firmup_end();
+        assert_eq!(req[1], 0xAA);
+        assert_eq!(req[2], 0xAA);
+        assert_eq!(req[3], CMD_FIRMUP_END);
+        assert_eq!(req[3], 0xE3);
+        for &b in &req[4..] {
+            assert_eq!(b, 0x00);
+        }
     }
 
     // -- Invariants ---------------------------------------------------------
@@ -323,6 +516,11 @@ mod tests {
             set_keymap_write3(&[0u8; 12]),
             confirm_keymap(),
             reset_dipsw(),
+            dump_firmware(),
+            firmup_mode_change(),
+            firmup_start(0x1000, 0xABCD),
+            firmup_send(0, &[0u8; 16]),
+            firmup_end(),
         ];
 
         for (i, req) in reqs.iter().enumerate() {

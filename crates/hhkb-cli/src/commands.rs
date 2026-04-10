@@ -140,7 +140,10 @@ pub fn dump() -> Result<()> {
         println!("== DIP switches ==");
         print!("{}", format::render_dipsw(&dipsw));
         println!();
-        println!("== Base keymap ({} overrides) ==", keymap.overridden_count());
+        println!(
+            "== Base keymap ({} overrides) ==",
+            keymap.overridden_count()
+        );
         print!("{}", format::hex_dump(&keymap));
         println!();
         println!(
@@ -218,10 +221,9 @@ pub fn write_keymap(file: &Path, mode: KeyboardMode, fn_layer: bool, yes: bool) 
 /// 1. The `read-keymap` output: `{ "bytes": [128 ints], ... }`.
 /// 2. A raw array of 128 integers: `[0, 0, 0, ..., 0]`.
 fn load_keymap_from_file(path: &Path) -> Result<Keymap> {
-    let text = fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-    let value: serde_json::Value =
-        serde_json::from_str(&text).context("failed to parse JSON")?;
+    let text =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let value: serde_json::Value = serde_json::from_str(&text).context("failed to parse JSON")?;
 
     let bytes_value: &serde_json::Value = match &value {
         serde_json::Value::Array(_) => &value,
@@ -267,6 +269,14 @@ fn confirm_prompt(message: &str) -> Result<bool> {
 // ---------------------------------------------------------------------------
 
 pub fn export_via(output: Option<&Path>) -> Result<()> {
+    // Snapshot the actual product_id BEFORE opening the session, so the
+    // exported VIA JSON reflects the real attached device rather than
+    // a hardcoded guess.
+    let product_id = HidApiTransport::list()
+        .ok()
+        .and_then(|devs| devs.into_iter().next().map(|d| d.product_id))
+        .unwrap_or(hhkb_core::HHKB_PRODUCT_IDS[0]);
+
     let (info, mode, base_keymap, fn_keymap) = with_device(|device| {
         let info = device.get_info().context("get_info failed")?;
         let mode = device.get_mode().context("get_mode failed")?;
@@ -279,18 +289,19 @@ pub fn export_via(output: Option<&Path>) -> Result<()> {
         Ok((info, mode, base, fn_km))
     })?;
 
-    let profile = build_via_profile(&info, mode, &base_keymap, &fn_keymap);
+    let profile = build_via_profile(&info, product_id, mode, &base_keymap, &fn_keymap);
     let json = profile.to_json().context("failed to serialize VIA JSON")?;
     write_output(output, &json)
 }
 
 fn build_via_profile(
     info: &hhkb_core::KeyboardInfo,
+    product_id: u16,
     mode: KeyboardMode,
     base: &Keymap,
     fn_km: &Keymap,
 ) -> ViaProfile {
-    let product_id_str = format!("0x{:04X}", guess_product_id(info));
+    let product_id_str = format!("0x{product_id:04X}");
 
     ViaProfile {
         name: info.type_number.clone(),
@@ -321,12 +332,6 @@ fn build_via_profile(
     }
 }
 
-/// HHKB's `get_info` doesn't report a USB product ID, so guess based on the
-/// first known PID. (The caller can edit the field manually if needed.)
-fn guess_product_id(_info: &hhkb_core::KeyboardInfo) -> u16 {
-    hhkb_core::HHKB_PRODUCT_IDS[0]
-}
-
 // ---------------------------------------------------------------------------
 // output helpers
 // ---------------------------------------------------------------------------
@@ -334,8 +339,7 @@ fn guess_product_id(_info: &hhkb_core::KeyboardInfo) -> u16 {
 fn write_output(path: Option<&Path>, content: &str) -> Result<()> {
     match path {
         Some(p) => {
-            fs::write(p, content)
-                .with_context(|| format!("failed to write {}", p.display()))?;
+            fs::write(p, content).with_context(|| format!("failed to write {}", p.display()))?;
             println!("Wrote {}", p.display());
         }
         None => {
@@ -369,12 +373,15 @@ const HHKB_LAYOUT_ROWS: &[&[u8]] = &[
     &[5, 4, 3, 2, 1],
 ];
 
+// Labels describe the FACTORY HHKB Pro 2 ANSI physical positions
+// (left → right within each row). Your stored bytes may differ if you
+// have a customized keymap — these are just orientation hints.
 const HHKB_ROW_LABELS: &[&str] = &[
-    "Row 0 (num): `  1  2  3  4  5  6  7  8  9  0  -  =  \\  Del",
-    "Row 1 (Q):   Tab  Q  W  E  R  T  Y  U  I  O  P  [  ]  \\",
-    "Row 2 (A):   Ctrl  A  S  D  F  G  H  J  K  L  ;  '  Enter",
-    "Row 3 (Z):   LShift  Z  X  C  V  B  N  M  ,  .  /  RShift  Fn",
-    "Row 4 (mod): LCmd  LAlt  Space  RAlt  RCmd",
+    "Row 0 (top, 60..46)   `  1  2  3  4  5  6  7  8  9  0  -  =  \\  BSpc",
+    "Row 1 (Q,   45..32)   Tab  Q  W  E  R  T  Y  U  I  O  P  [  ]  \\",
+    "Row 2 (A,   31..19)   Ctrl  A  S  D  F  G  H  J  K  L  ;  '  Enter",
+    "Row 3 (Z,   18..6 )   LShift  Z  X  C  V  B  N  M  ,  .  /  RShift  Fn",
+    "Row 4 (mod, 5..1  )   LMeta  LAlt  Space  RAlt  RMeta   (Mac: Meta=Cmd)",
 ];
 
 /// Render the 128-byte keymap as an HHKB ANSI-shaped grid: for each row we
@@ -455,9 +462,7 @@ pub fn discover_key(
             if fn_layer { "fn" } else { "base" },
             format::mode_name(mode)
         );
-        println!(
-            "  keymap[{index}] = 0x{original_byte:02x} (will be restored automatically)"
-        );
+        println!("  keymap[{index}] = 0x{original_byte:02x} (will be restored automatically)");
 
         // 2. Build modified keymap with the sentinel.
         let mut modified = original.clone();
@@ -599,9 +604,12 @@ mod tests {
         let base = Keymap::from_bytes(base_raw);
         let fn_km = Keymap::from_bytes(fn_raw);
 
-        let profile = build_via_profile(&info, KeyboardMode::Mac, &base, &fn_km);
+        let profile = build_via_profile(&info, 0x0021, KeyboardMode::Mac, &base, &fn_km);
         assert_eq!(profile.name, "PD-KB800BNS");
         assert_eq!(profile.vendor_id, "0x04FE");
+        // Verify the actual product_id propagates (regression: A1 from
+        // hardware-baseline session — used to be hardcoded to 0x0020).
+        assert_eq!(profile.product_id, "0x0021");
         let ronin = profile.ronin.as_ref().unwrap();
         assert_eq!(ronin.version, "1.0");
         let hw = ronin.hardware.as_ref().unwrap();
@@ -639,9 +647,9 @@ mod tests {
         let km = Keymap::from_bytes(raw);
         let text = render_keymap_grid(&km);
 
-        // Row 0 label present.
-        assert!(text.contains("Row 0 (num)"));
-        assert!(text.contains("Row 4 (mod)"));
+        // Row 0 / row 4 labels present.
+        assert!(text.contains("Row 0 (top"));
+        assert!(text.contains("Row 4 (mod"));
 
         // Value 35 (backtick) should appear in row 0 line.
         let row0_block: String = text
@@ -650,7 +658,10 @@ mod tests {
             .take(3)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(row0_block.contains(" 35"), "row 0 block missing 35: {row0_block}");
+        assert!(
+            row0_block.contains(" 35"),
+            "row 0 block missing 35: {row0_block}"
+        );
 
         // Value 2c (space) should appear in row 4 line.
         let row4_block: String = text
@@ -659,7 +670,10 @@ mod tests {
             .take(3)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(row4_block.contains(" 2c"), "row 4 block missing 2c: {row4_block}");
+        assert!(
+            row4_block.contains(" 2c"),
+            "row 4 block missing 2c: {row4_block}"
+        );
 
         // Value 04 (A) should appear in row 2 line.
         let row2_block: String = text
@@ -668,7 +682,10 @@ mod tests {
             .take(3)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(row2_block.contains(" 04"), "row 2 block missing 04: {row2_block}");
+        assert!(
+            row2_block.contains(" 04"),
+            "row 2 block missing 04: {row2_block}"
+        );
     }
 
     // -- tiny throwaway temp directory helper --

@@ -116,8 +116,7 @@ mod hidapi_impl {
         ///
         /// Returns [`Error::DeviceNotFound`] if no matching device exists.
         pub fn open() -> Result<Self> {
-            let api = HidApi::new()
-                .map_err(|e| Error::Transport(format!("hidapi init: {e}")))?;
+            let api = HidApi::new().map_err(|e| Error::Transport(format!("hidapi init: {e}")))?;
 
             for info in api.device_list() {
                 if info.vendor_id() != HHKB_VENDOR_ID {
@@ -143,8 +142,7 @@ mod hidapi_impl {
 
         /// Open a specific device by hidapi path (for picking among multiple).
         pub fn open_path(path: &std::ffi::CStr) -> Result<Self> {
-            let api = HidApi::new()
-                .map_err(|e| Error::Transport(format!("hidapi init: {e}")))?;
+            let api = HidApi::new().map_err(|e| Error::Transport(format!("hidapi init: {e}")))?;
             let device = api
                 .open_path(path)
                 .map_err(|e| Error::Transport(format!("hidapi open: {e}")))?;
@@ -154,8 +152,7 @@ mod hidapi_impl {
         /// List all attached HHKB devices on the vendor interface.
         /// Returns a vector of (path, product_id, manufacturer, product) tuples.
         pub fn list() -> Result<Vec<HhkbDeviceInfo>> {
-            let api = HidApi::new()
-                .map_err(|e| Error::Transport(format!("hidapi init: {e}")))?;
+            let api = HidApi::new().map_err(|e| Error::Transport(format!("hidapi init: {e}")))?;
             let mut out = Vec::new();
             for info in api.device_list() {
                 if info.vendor_id() != HHKB_VENDOR_ID {

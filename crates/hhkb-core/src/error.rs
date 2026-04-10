@@ -66,10 +66,7 @@ mod tests {
             vid: 0x04FE,
             pid: 0x0020,
         };
-        assert_eq!(
-            err.to_string(),
-            "device not found: VID=0x04FE PID=0x0020"
-        );
+        assert_eq!(err.to_string(), "device not found: VID=0x04FE PID=0x0020");
     }
 
     #[test]

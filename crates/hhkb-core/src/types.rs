@@ -222,30 +222,21 @@ mod tests {
     fn dip_switch_from_byte_slice() {
         let bytes: &[u8] = &[0, 1, 0, 1, 0, 0];
         let state = DipSwitchState::from(bytes);
-        assert_eq!(
-            state.switches,
-            [false, true, false, true, false, false]
-        );
+        assert_eq!(state.switches, [false, true, false, true, false, false]);
     }
 
     #[test]
     fn dip_switch_from_short_slice_pads_false() {
         let bytes: &[u8] = &[1, 0];
         let state = DipSwitchState::from(bytes);
-        assert_eq!(
-            state.switches,
-            [true, false, false, false, false, false]
-        );
+        assert_eq!(state.switches, [true, false, false, false, false, false]);
     }
 
     #[test]
     fn dip_switch_nonzero_is_true() {
         let bytes: &[u8] = &[0xFF, 2, 0, 0, 0, 1];
         let state = DipSwitchState::from(bytes);
-        assert_eq!(
-            state.switches,
-            [true, true, false, false, false, true]
-        );
+        assert_eq!(state.switches, [true, true, false, false, false, true]);
     }
 
     // -- KeyboardInfo -------------------------------------------------------
@@ -308,10 +299,7 @@ mod tests {
         let data = [0u8; 50];
         let result = KeyboardInfo::parse(&data);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("too short"));
+        assert!(result.unwrap_err().to_string().contains("too short"));
     }
 
     #[test]
