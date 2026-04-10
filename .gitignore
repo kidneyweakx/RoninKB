@@ -1,0 +1,26 @@
+# Rust
+target/
+Cargo.lock
+
+# Packet captures (large binary files)
+spec/captures/sessions/**/*.pcapng
+spec/captures/sessions/**/*.pcap
+
+# Vendor reference (cloned repos, not committed)
+vendor-reference/
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
+
