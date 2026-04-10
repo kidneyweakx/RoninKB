@@ -13,6 +13,16 @@ interface UiState {
   syncBannerDismissed: boolean;
   dismissSyncBanner: () => void;
   resetSyncBanner: () => void;
+
+  /**
+   * Whether the user has already acknowledged this session that editing a
+   * key in the Keyboard layer writes to the HHKB EEPROM (on next Resync).
+   * The first edit pops a confirmation modal; subsequent edits go straight
+   * through. Resets on page reload, on purpose, so a newly-opened tab
+   * reminds you again.
+   */
+  hwEditAcknowledged: boolean;
+  acknowledgeHwEdit: () => void;
 }
 
 export const useUiStore = create<UiState>((set) => ({
@@ -22,6 +32,11 @@ export const useUiStore = create<UiState>((set) => ({
   },
   resetSyncBanner() {
     set({ syncBannerDismissed: false });
+  },
+
+  hwEditAcknowledged: false,
+  acknowledgeHwEdit() {
+    set({ hwEditAcknowledged: true });
   },
 }));
 

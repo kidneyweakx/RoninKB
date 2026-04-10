@@ -16,6 +16,10 @@ import {
   serializeViaProfile,
 } from '../hhkb/via';
 import { useDaemonStore } from './daemonStore';
+import {
+  FACTORY_PROFILES,
+  FACTORY_PROFILE_IDS,
+} from '../data/factoryDefault';
 
 export interface Profile {
   id: string;
@@ -82,6 +86,8 @@ interface ProfileState {
   error: string | null;
 
   addProfile: (p: Profile) => Promise<void>;
+  /** Create a new blank or prefilled profile and return it. */
+  createNew: (name: string, template?: ViaProfile) => Promise<Profile>;
   removeProfile: (id: string) => Promise<void>;
   setActiveProfile: (id: string) => Promise<void>;
   getActive: () => Profile | undefined;
@@ -112,8 +118,15 @@ function profileFromVia(via: ViaProfile, fallbackId?: string): Profile {
 
 const initial = loadFromLocalStorage();
 
+/** Merge factory profiles in — they are never stored (always live in code). */
+function mergeFactoryProfiles(profiles: Profile[]): Profile[] {
+  const ids = new Set(profiles.map((p) => p.id));
+  const missing = FACTORY_PROFILES.filter((fp) => !ids.has(fp.id));
+  return missing.length > 0 ? [...missing, ...profiles] : profiles;
+}
+
 export const useProfileStore = create<ProfileState>((set, get) => ({
-  profiles: initial?.profiles ?? [defaultProfile],
+  profiles: mergeFactoryProfiles(initial?.profiles ?? [defaultProfile]),
   activeProfileId: initial?.activeProfileId ?? defaultProfile.id,
   source: 'local',
   loading: false,
@@ -150,7 +163,30 @@ export const useProfileStore = create<ProfileState>((set, get) => ({
     });
   },
 
+  async createNew(name, template) {
+    const id = genId();
+    const via: ViaProfile = template
+      ? { ...template, name }
+      : {
+          name,
+          vendorId: '0x04FE',
+          productId: '0x0021',
+          matrix: { rows: 8, cols: 8 },
+          layers: [],
+          _roninKB: {
+            version: '1.0',
+            profile: { id, name },
+          },
+        };
+    const profile: Profile = { id, name, tags: [], via };
+    await get().addProfile(profile);
+    return profile;
+  },
+
   async removeProfile(id) {
+    // Factory profiles are immutable — silently ignore.
+    if (FACTORY_PROFILE_IDS.has(id)) return;
+
     const daemon = useDaemonStore.getState().client;
     if (daemon) {
       try {
@@ -235,8 +271,9 @@ export const useProfileStore = create<ProfileState>((set, get) => ({
         // ignore
       }
       set({
-        profiles:
+        profiles: mergeFactoryProfiles(
           profiles.length > 0 ? profiles : get().profiles,
+        ),
         activeProfileId: activeId ?? get().activeProfileId,
         source: 'daemon',
         loading: false,

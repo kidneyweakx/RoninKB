@@ -223,8 +223,8 @@ export class DaemonClient {
     return requestJson<unknown>(`${this.baseUrl}/device/mode`);
   }
 
-  async deviceDipsw(): Promise<unknown> {
-    return requestJson<unknown>(`${this.baseUrl}/device/dipsw`);
+  async deviceDipsw(): Promise<DipSwitchState> {
+    return requestJson<DipSwitchState>(`${this.baseUrl}/device/dipsw`);
   }
 
   async readKeymap(
@@ -289,6 +289,29 @@ export class DaemonClient {
     };
   }
 
+  /** Spawn a new kanata child. Fails if already running or no binary. */
+  async kanataStart(): Promise<number> {
+    const res = await requestJson<{ pid: number }>(
+      `${this.baseUrl}/kanata/start`,
+      { method: 'POST' },
+    );
+    return res.pid;
+  }
+
+  /** Terminate the running kanata child. Fails if nothing is running. */
+  async kanataStop(): Promise<void> {
+    await requestJson<unknown>(`${this.baseUrl}/kanata/stop`, {
+      method: 'POST',
+    });
+  }
+
+  /** Read the on-disk .kbd config. Returns an empty string when absent. */
+  async kanataGetConfig(): Promise<{ config: string; path: string }> {
+    return requestJson<{ config: string; path: string }>(
+      `${this.baseUrl}/kanata/config`,
+    );
+  }
+
   /**
    * Hot-reload kanata with a new config. The daemon writes `config` to its
    * managed `.kbd` file and signals the running child (SIGUSR1 on unix,
@@ -309,6 +332,21 @@ export interface KanataStatus {
   version?: string;
   state?: string;
   pid?: number;
+}
+
+/**
+ * HHKB Professional Hybrid has 6 physical DIP switches on the bottom.
+ * `switches[i]` is `true` when switch i+1 is in the ON position.
+ *
+ * Per the PFU HHKB Professional HYBRID user manual, the switches map to:
+ *   SW1, SW2 — keyboard mode combination (HHK / Lite Ext / Mac / special)
+ *   SW3       — Delete / BS swap
+ *   SW4       — Left ⌘ / ⌥ swap
+ *   SW5       — Power saver (wireless mode)
+ *   SW6       — Reserved
+ */
+export interface DipSwitchState {
+  switches: [boolean, boolean, boolean, boolean, boolean, boolean];
 }
 
 // ---------------------------------------------------------------------------

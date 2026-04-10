@@ -48,6 +48,14 @@ interface DeviceState {
   transportMode: () => TransportMode;
   /** Write the currently-held base+fn keymaps through the daemon proxy. */
   writeKeymaps: () => Promise<void>;
+  /**
+   * Snapshot the current hardware keymaps into a new named Profile and
+   * persist it via the profile store. Useful for saving the current
+   * (potentially modified) state before reverting to factory default.
+   *
+   * Returns the newly-created Profile.
+   */
+  captureHardwareProfile: (name: string) => Promise<import('../store/profileStore').Profile>;
 }
 
 export const useDeviceStore = create<DeviceState>((set, get) => ({
@@ -186,6 +194,30 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
     next.set(index, value);
     if (layer === 'base') set({ baseKeymap: next });
     else set({ fnKeymap: next });
+  },
+
+  async captureHardwareProfile(name: string) {
+    const { baseKeymap, fnKeymap, mode } = get();
+    const baseArr = baseKeymap ? Array.from(baseKeymap.asBytes()) : new Array<number>(128).fill(0);
+    const fnArr = fnKeymap ? Array.from(fnKeymap.asBytes()) : new Array<number>(128).fill(0);
+    const via = {
+      name,
+      vendorId: '0x04FE',
+      productId: '0x0021',
+      matrix: { rows: 8, cols: 8 },
+      layers: [],
+      _roninKB: {
+        version: '1.0',
+        profile: { id: '', name },
+        hardware: {
+          keyboard_mode: mode as number,
+          raw_layers: { base: baseArr, fn: fnArr },
+        },
+      },
+    };
+    const { useProfileStore } = await import('./profileStore');
+    const profile = await useProfileStore.getState().createNew(name, via);
+    return profile;
   },
 
   async writeKeymaps() {
