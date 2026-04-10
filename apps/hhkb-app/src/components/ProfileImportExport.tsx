@@ -15,6 +15,8 @@ import { useRef, useState } from 'react';
 import {
   Box,
   Button,
+  Divider,
+  Flex,
   HStack,
   Modal,
   ModalBody,
@@ -27,6 +29,13 @@ import {
   VStack,
   useToast,
 } from '@chakra-ui/react';
+import {
+  Upload,
+  FileJson,
+  AlertTriangle,
+  Download,
+  CheckCircle2,
+} from 'lucide-react';
 import { useProfileStore } from '../store/profileStore';
 import { parseViaProfile, ViaProfile } from '../hhkb/via';
 
@@ -166,23 +175,32 @@ export function ProfileImportExport({ isOpen, onClose }: Props) {
   return (
     <Modal isOpen={isOpen} onClose={onClose} size="xl">
       <ModalOverlay />
-      <ModalContent bg="gray.800" color="white">
-        <ModalHeader>Import / Export profiles</ModalHeader>
+      <ModalContent>
+        <ModalHeader>
+          <HStack spacing={2}>
+            <FileJson size={16} />
+            <Text>Profiles</Text>
+          </HStack>
+        </ModalHeader>
         <ModalCloseButton />
         <ModalBody>
           <VStack align="stretch" spacing={5}>
+            {/* Import section */}
             <Box>
-              <Text fontSize="sm" color="gray.400" mb={2}>
-                Import a VIA-compatible JSON profile. RoninKB extensions
-                (<code>_roninKB</code>) are preserved losslessly.
+              <SectionLabel>Import</SectionLabel>
+              <Text fontSize="xs" color="text.muted" mb={3}>
+                Drop a VIA-compatible JSON file. RoninKB extensions
+                (<Text as="span" fontFamily="mono">_roninKB</Text>) are
+                preserved losslessly.
               </Text>
               <Box
-                borderRadius="md"
-                border="2px dashed"
-                borderColor={dragOver ? 'brand.400' : 'gray.600'}
-                bg={dragOver ? 'gray.700' : 'gray.900'}
+                borderRadius="lg"
+                border="1.5px dashed"
+                borderColor={dragOver ? 'accent.primary' : 'border.muted'}
+                bg={dragOver ? 'accent.subtle' : 'bg.subtle'}
                 p={6}
                 textAlign="center"
+                transition="background-color 0.15s ease, border-color 0.15s ease"
                 onDragOver={(e) => {
                   e.preventDefault();
                   setDragOver(true);
@@ -190,54 +208,97 @@ export function ProfileImportExport({ isOpen, onClose }: Props) {
                 onDragLeave={() => setDragOver(false)}
                 onDrop={handleDrop}
               >
-                <Text mb={3}>Drop a <code>.json</code> file here</Text>
-                <Button
-                  size="sm"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  Choose file...
-                </Button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".json,application/json"
-                  style={{ display: 'none' }}
-                  onChange={handleFileSelect}
-                />
+                <Flex direction="column" align="center" gap={2}>
+                  <Box color={dragOver ? 'accent.primary' : 'text.muted'}>
+                    <Upload size={24} strokeWidth={1.5} />
+                  </Box>
+                  <Text fontSize="sm" color="text.secondary">
+                    Drop a{' '}
+                    <Text as="span" fontFamily="mono" color="text.primary">
+                      .json
+                    </Text>{' '}
+                    file here
+                  </Text>
+                  <Button
+                    size="sm"
+                    variant="subtle"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    Choose file
+                  </Button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".json,application/json"
+                    style={{ display: 'none' }}
+                    onChange={handleFileSelect}
+                  />
+                </Flex>
               </Box>
             </Box>
 
             {error && (
-              <Box bg="red.900" color="red.100" p={3} borderRadius="md">
-                <Text fontSize="sm">Error: {error}</Text>
-              </Box>
+              <HStack
+                spacing={2}
+                p={3}
+                bg="danger.subtle"
+                border="1px solid"
+                borderColor="danger"
+                borderRadius="md"
+                color="danger"
+                align="flex-start"
+              >
+                <Box pt="2px">
+                  <AlertTriangle size={14} />
+                </Box>
+                <Text fontSize="xs" fontFamily="mono">
+                  {error}
+                </Text>
+              </HStack>
             )}
 
             {preview && (
-              <Box bg="gray.900" p={4} borderRadius="md">
-                <Text fontWeight="bold" mb={2}>
-                  Preview
-                </Text>
-                <VStack align="stretch" spacing={1} fontSize="sm">
-                  <Text>Name: {preview.name}</Text>
-                  <Text>
-                    Vendor: {preview.vendorId} / Product: {preview.productId}
+              <Box
+                bg="bg.subtle"
+                border="1px solid"
+                borderColor="border.subtle"
+                p={4}
+                borderRadius="lg"
+              >
+                <HStack mb={3} spacing={2}>
+                  <Box color="success">
+                    <CheckCircle2 size={14} />
+                  </Box>
+                  <Text fontSize="xs" fontWeight={500} color="text.primary">
+                    Preview
                   </Text>
-                  <Text>Layers: {preview.layerCount}</Text>
+                </HStack>
+                <VStack align="stretch" spacing={1.5}>
+                  <MetaRow label="Name" value={preview.name} />
+                  <MetaRow
+                    label="Vendor / Product"
+                    value={`${preview.vendorId} / ${preview.productId}`}
+                  />
+                  <MetaRow
+                    label="Layers"
+                    value={String(preview.layerCount)}
+                  />
                   {preview.tags.length > 0 && (
-                    <Text>Tags: {preview.tags.join(', ')}</Text>
+                    <MetaRow label="Tags" value={preview.tags.join(', ')} />
                   )}
                 </VStack>
               </Box>
             )}
 
+            <Divider />
+
+            {/* Export section */}
             <Box>
-              <Text fontSize="sm" color="gray.400" mb={2}>
-                Export
-              </Text>
+              <SectionLabel>Export</SectionLabel>
               <HStack>
                 <Button
                   size="sm"
+                  leftIcon={<Download size={14} />}
                   onClick={handleExportCurrent}
                   isDisabled={!active}
                 >
@@ -245,22 +306,24 @@ export function ProfileImportExport({ isOpen, onClose }: Props) {
                 </Button>
                 <Button
                   size="sm"
+                  variant="ghost"
+                  leftIcon={<Download size={14} />}
                   onClick={handleExportAll}
                   isDisabled={profiles.length === 0}
                 >
-                  Export all
+                  Export all ({profiles.length})
                 </Button>
               </HStack>
             </Box>
           </VStack>
         </ModalBody>
         <ModalFooter>
-          <HStack>
+          <HStack spacing={2}>
             <Button variant="ghost" onClick={onClose}>
               Close
             </Button>
             <Button
-              colorScheme="brand"
+              variant="solid"
               onClick={handleConfirmImport}
               isDisabled={!preview}
             >
@@ -270,5 +333,31 @@ export function ProfileImportExport({ isOpen, onClose }: Props) {
         </ModalFooter>
       </ModalContent>
     </Modal>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <Text
+      fontSize="10px"
+      color="text.muted"
+      fontFamily="mono"
+      textTransform="uppercase"
+      letterSpacing="0.08em"
+      mb={2}
+    >
+      {children}
+    </Text>
+  );
+}
+
+function MetaRow({ label, value }: { label: string; value: string }) {
+  return (
+    <Flex justify="space-between" fontSize="xs">
+      <Text color="text.muted">{label}</Text>
+      <Text fontFamily="mono" color="text.primary">
+        {value}
+      </Text>
+    </Flex>
   );
 }

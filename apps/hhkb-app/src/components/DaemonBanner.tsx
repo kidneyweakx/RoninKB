@@ -1,4 +1,5 @@
-import { Box, Button, HStack, Text } from '@chakra-ui/react';
+import { Box, Button, Flex, HStack, IconButton, Text } from '@chakra-ui/react';
+import { Info, X, ExternalLink } from 'lucide-react';
 import { useDaemonStore } from '../store/daemonStore';
 
 export function DaemonBanner() {
@@ -9,31 +10,36 @@ export function DaemonBanner() {
   if (status !== 'offline' || bannerDismissed) return null;
 
   return (
-    <Box
-      bg="yellow.600"
-      color="gray.900"
-      px={6}
-      py={3}
-      borderBottom="1px solid"
-      borderColor="yellow.700"
-    >
-      <HStack justify="space-between">
-        <Text fontSize="sm" fontWeight="semibold">
-          Install the RoninKB Daemon for software macros and Flow clipboard
-          sync. Basic keymap editing works without it.
-        </Text>
-        <HStack spacing={2}>
+    <Box mx={4} mt={3}>
+      <Flex
+        align="center"
+        gap={3}
+        px={4}
+        py={2.5}
+        bg="bg.surface"
+        border="1px solid"
+        borderColor="border.subtle"
+        borderRadius="lg"
+        borderLeftColor="info"
+        borderLeftWidth="3px"
+      >
+        <Box color="info" display="flex" flexShrink={0}>
+          <Info size={16} />
+        </Box>
+        <Box flex="1" minW={0}>
+          <Text fontSize="xs" color="text.primary" fontWeight={500}>
+            Optional: Install the RoninKB daemon for macros and clipboard
+            sync
+          </Text>
+          <Text fontSize="11px" color="text.muted">
+            Basic keymap editing works without it.
+          </Text>
+        </Box>
+        <HStack spacing={1} flexShrink={0}>
           <Button
-            size="sm"
-            variant="outline"
-            colorScheme="blackAlpha"
-            onClick={dismiss}
-          >
-            Skip
-          </Button>
-          <Button
-            size="sm"
-            colorScheme="blackAlpha"
+            size="xs"
+            variant="ghost"
+            rightIcon={<ExternalLink size={12} />}
             onClick={() => {
               window.open(
                 'https://github.com/roninkb/roninKB/releases',
@@ -43,8 +49,15 @@ export function DaemonBanner() {
           >
             Download
           </Button>
+          <IconButton
+            aria-label="Dismiss"
+            icon={<X size={14} />}
+            size="xs"
+            variant="ghost"
+            onClick={dismiss}
+          />
         </HStack>
-      </HStack>
+      </Flex>
     </Box>
   );
 }

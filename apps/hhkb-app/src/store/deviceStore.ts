@@ -59,6 +59,29 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
 
   async connect() {
     set({ status: 'connecting', error: null });
+
+    // Prefer the daemon transport when it's reachable and already holds the
+    // device. The macOS kernel gives exclusive access to an HID usage page
+    // to the first process that opens it, so if the daemon has the keyboard
+    // open via hidapi, a parallel WebHID `device.open()` will fail with
+    // "Failed to open the device". Routing through the daemon avoids the
+    // contention entirely.
+    const daemon = useDaemonStore.getState();
+    if (daemon.status === 'online' && daemon.client && daemon.deviceConnected) {
+      try {
+        set({ device: null, info: null, status: 'connected' });
+        await get().loadKeymapsFromDaemon();
+        return;
+      } catch (e) {
+        set({
+          status: 'error',
+          error: e instanceof Error ? e.message : String(e),
+          device: null,
+        });
+        return;
+      }
+    }
+
     try {
       const device = await HhkbDevice.request();
       await device.notifyAppOpen();

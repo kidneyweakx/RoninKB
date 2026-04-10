@@ -1,5 +1,17 @@
 import { useState, useMemo } from 'react';
-import { Box, Input, SimpleGrid, Button, VStack, Text } from '@chakra-ui/react';
+import {
+  Box,
+  Input,
+  InputGroup,
+  InputLeftElement,
+  SimpleGrid,
+  Button,
+  VStack,
+  Text,
+  HStack,
+  Flex,
+} from '@chakra-ui/react';
+import { Search } from 'lucide-react';
 
 /**
  * A tiny, searchable keycode list. Ships with a minimal set of HID Usage IDs
@@ -10,6 +22,18 @@ interface KeycodeEntry {
   name: string;
   category: 'letter' | 'number' | 'mod' | 'nav' | 'fn' | 'misc';
 }
+
+type Category = KeycodeEntry['category'] | 'all';
+
+const CATEGORY_LABELS: Record<Category, string> = {
+  all: 'All',
+  letter: 'Letters',
+  number: 'Numbers',
+  mod: 'Modifiers',
+  nav: 'Navigation',
+  fn: 'Function',
+  misc: 'Misc',
+};
 
 const KEYCODES: KeycodeEntry[] = [
   // Letters
@@ -31,10 +55,10 @@ const KEYCODES: KeycodeEntry[] = [
   { code: 0x2b, name: 'Tab', category: 'nav' },
   { code: 0x2c, name: 'Space', category: 'nav' },
   { code: 0x39, name: 'Caps Lock', category: 'nav' },
-  { code: 0x4f, name: '→ Right', category: 'nav' },
-  { code: 0x50, name: '← Left', category: 'nav' },
-  { code: 0x51, name: '↓ Down', category: 'nav' },
-  { code: 0x52, name: '↑ Up', category: 'nav' },
+  { code: 0x4f, name: 'Right', category: 'nav' },
+  { code: 0x50, name: 'Left', category: 'nav' },
+  { code: 0x51, name: 'Down', category: 'nav' },
+  { code: 0x52, name: 'Up', category: 'nav' },
   // Modifiers
   { code: 0xe0, name: 'L Ctrl', category: 'mod' },
   { code: 0xe1, name: 'L Shift', category: 'mod' },
@@ -54,47 +78,124 @@ const KEYCODES: KeycodeEntry[] = [
   { code: 0x00, name: 'Default', category: 'misc' },
 ];
 
+const CATEGORY_ORDER: Category[] = [
+  'all',
+  'letter',
+  'number',
+  'mod',
+  'nav',
+  'fn',
+  'misc',
+];
+
 export function KeycodePicker({ onPick }: { onPick: (code: number) => void }) {
   const [query, setQuery] = useState('');
+  const [cat, setCat] = useState<Category>('all');
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return KEYCODES;
-    return KEYCODES.filter(
-      (k) =>
+    return KEYCODES.filter((k) => {
+      if (cat !== 'all' && k.category !== cat) return false;
+      if (!q) return true;
+      return (
         k.name.toLowerCase().includes(q) ||
-        k.code.toString(16).includes(q),
-    );
-  }, [query]);
+        k.code.toString(16).includes(q)
+      );
+    });
+  }, [query, cat]);
 
   return (
-    <VStack align="stretch" spacing={3}>
-      <Input
-        size="sm"
-        placeholder="Search keycode..."
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-      />
-      <Box maxH="280px" overflowY="auto" pr={1}>
-        <SimpleGrid columns={4} spacing={2}>
-          {filtered.map((k) => (
-            <Button
-              key={k.code}
-              size="xs"
-              variant="outline"
-              colorScheme="whiteAlpha"
-              onClick={() => onPick(k.code)}
-              title={`0x${k.code.toString(16).padStart(2, '0')}`}
+    <VStack
+      align="stretch"
+      spacing={3}
+      bg="bg.subtle"
+      border="1px solid"
+      borderColor="border.subtle"
+      borderRadius="lg"
+      p={3}
+    >
+      <InputGroup size="sm">
+        <InputLeftElement pointerEvents="none" color="text.muted">
+          <Search size={14} />
+        </InputLeftElement>
+        <Input
+          placeholder="Search keycode or hex…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          variant="filled"
+          fontFamily="mono"
+          fontSize="xs"
+        />
+      </InputGroup>
+
+      <HStack spacing={1} flexWrap="wrap">
+        {CATEGORY_ORDER.map((c) => {
+          const active = cat === c;
+          return (
+            <Box
+              key={c}
+              as="button"
+              onClick={() => setCat(c)}
+              px={2.5}
+              py={1}
+              borderRadius="sm"
+              fontSize="10px"
+              fontWeight={500}
+              textTransform="uppercase"
+              letterSpacing="0.06em"
+              fontFamily="mono"
+              bg={active ? 'accent.subtle' : 'transparent'}
+              color={active ? 'accent.primary' : 'text.muted'}
+              border="1px solid"
+              borderColor={active ? 'accent.primary' : 'border.subtle'}
+              transition="background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease"
+              _hover={{
+                bg: active ? 'accent.subtle' : 'bg.elevated',
+                color: active ? 'accent.primary' : 'text.primary',
+              }}
             >
-              {k.name}
-            </Button>
-          ))}
-        </SimpleGrid>
-        {filtered.length === 0 && (
-          <Text color="gray.400" fontSize="sm">
-            No matches.
-          </Text>
+              {CATEGORY_LABELS[c]}
+            </Box>
+          );
+        })}
+      </HStack>
+
+      <Box maxH="260px" overflowY="auto" pr={1} mx={-1} px={1}>
+        {filtered.length === 0 ? (
+          <Flex
+            align="center"
+            justify="center"
+            h="100px"
+            color="text.muted"
+            fontSize="xs"
+            fontFamily="mono"
+          >
+            no matches
+          </Flex>
+        ) : (
+          <SimpleGrid columns={{ base: 4, md: 6, lg: 8 }} spacing={1.5}>
+            {filtered.map((k) => (
+              <Button
+                key={k.code}
+                size="xs"
+                variant="subtle"
+                onClick={() => onPick(k.code)}
+                title={`0x${k.code.toString(16).padStart(2, '0')}`}
+                fontFamily="mono"
+                fontSize="10px"
+                h="28px"
+                px={1}
+              >
+                {k.name}
+              </Button>
+            ))}
+          </SimpleGrid>
         )}
       </Box>
+
+      <Text fontSize="10px" color="text.muted" fontFamily="mono">
+        {filtered.length} codes
+      </Text>
     </VStack>
   );
 }

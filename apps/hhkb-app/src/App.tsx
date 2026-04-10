@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Box, Flex, VStack } from '@chakra-ui/react';
+import { Box, Flex, HStack, Text, VStack } from '@chakra-ui/react';
+import { Layers } from 'lucide-react';
 import { Header } from './components/Header';
 import { KeyboardSvg } from './components/KeyboardSvg';
 import { KeyDetailPanel } from './components/KeyDetailPanel';
@@ -11,7 +12,7 @@ import { useDaemonStore } from './store/daemonStore';
 import { useProfileStore } from './store/profileStore';
 
 export default function App() {
-  const device = useDeviceStore((s) => s.device);
+  const deviceStatus = useDeviceStore((s) => s.status);
   const checkDaemon = useDaemonStore((s) => s.check);
   const startAutoPoll = useDaemonStore((s) => s.startAutoPoll);
   const stopAutoPoll = useDaemonStore((s) => s.stopAutoPoll);
@@ -52,16 +53,36 @@ export default function App() {
   }, [events, loadProfilesFromDaemon]);
 
   return (
-    <Flex direction="column" minH="100vh" bg="gray.900" color="white">
+    <Flex direction="column" minH="100vh" bg="bg.primary" color="text.primary">
       <Header />
       <DaemonBanner />
 
-      <Flex flex="1" p={6} gap={6}>
-        {device ? (
-          <>
-            <Box flex="2">
+      <Box maxW="1280px" w="100%" mx="auto" px={{ base: 4, md: 6 }} py={6}>
+        {deviceStatus === 'connected' ? (
+          <Flex
+            gap={6}
+            direction={{ base: 'column', xl: 'row' }}
+            align="stretch"
+          >
+            <Box flex="1 1 auto" minW={0}>
               <VStack align="stretch" spacing={4}>
-                <LayerTabs layer={layer} onChange={setLayer} />
+                <Flex align="center" justify="space-between">
+                  <HStack spacing={2}>
+                    <Box color="text.muted" display="flex">
+                      <Layers size={14} />
+                    </Box>
+                    <Text
+                      fontSize="10px"
+                      color="text.muted"
+                      fontFamily="mono"
+                      textTransform="uppercase"
+                      letterSpacing="0.08em"
+                    >
+                      Layer
+                    </Text>
+                  </HStack>
+                  <LayerTabs layer={layer} onChange={setLayer} />
+                </Flex>
                 <KeyboardSvg
                   layer={layer}
                   selectedIndex={selectedIndex}
@@ -69,17 +90,17 @@ export default function App() {
                 />
               </VStack>
             </Box>
-            <Box flex="1" minW="320px">
+            <Box w={{ base: '100%', xl: '360px' }} flexShrink={0}>
               <KeyDetailPanel
                 selectedIndex={selectedIndex}
                 layer={layer}
               />
             </Box>
-          </>
+          </Flex>
         ) : (
           <EmptyState />
         )}
-      </Flex>
+      </Box>
 
       <EventLog />
     </Flex>
@@ -94,22 +115,42 @@ function LayerTabs({
   onChange: (l: 'base' | 'fn') => void;
 }) {
   return (
-    <Flex gap={2}>
-      {(['base', 'fn'] as const).map((l) => (
-        <Box
-          key={l}
-          as="button"
-          px={4}
-          py={2}
-          borderRadius="md"
-          bg={layer === l ? 'brand.500' : 'gray.700'}
-          color="white"
-          fontWeight="semibold"
-          onClick={() => onChange(l)}
-        >
-          {l === 'base' ? 'Base Layer' : 'Fn Layer'}
-        </Box>
-      ))}
-    </Flex>
+    <HStack
+      spacing={0}
+      p="3px"
+      bg="bg.subtle"
+      border="1px solid"
+      borderColor="border.subtle"
+      borderRadius="md"
+    >
+      {(['base', 'fn'] as const).map((l) => {
+        const active = layer === l;
+        return (
+          <Box
+            key={l}
+            as="button"
+            px={3}
+            py={1}
+            borderRadius="sm"
+            bg={active ? 'bg.elevated' : 'transparent'}
+            color={active ? 'text.primary' : 'text.muted'}
+            fontWeight={500}
+            fontSize="11px"
+            fontFamily="mono"
+            textTransform="uppercase"
+            letterSpacing="0.08em"
+            border="1px solid"
+            borderColor={active ? 'border.subtle' : 'transparent'}
+            transition="background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease"
+            _hover={{
+              color: 'text.primary',
+            }}
+            onClick={() => onChange(l)}
+          >
+            {l === 'base' ? 'Base' : 'Fn'}
+          </Box>
+        );
+      })}
+    </HStack>
   );
 }
