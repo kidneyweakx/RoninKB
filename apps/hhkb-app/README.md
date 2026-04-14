@@ -40,6 +40,9 @@ one from the Rust implementation in `crates/hhkb-core`.
   buffer have not been fully reverse-engineered (see the TODO there and
   `spec/protocol/keymap-encoding.md`). Do not trust visual edits when writing
   to real hardware until that mapping is verified.
+- Bluetooth pairing and transport switching are handled by the operating
+  system. The app only shows BLE status / battery information exposed by the
+  daemon and does not offer in-app connect / disconnect controls.
 - Daemon detection only checks `localhost:7331/health`. Actual daemon
   integration (profile sync, Kanata control) is not implemented yet.
 - No persistent profile storage — the profile store is in-memory only.

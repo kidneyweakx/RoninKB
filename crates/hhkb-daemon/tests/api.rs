@@ -108,6 +108,41 @@ async fn device_connected_reports_false_without_device() {
     assert_eq!(body["connected"], false);
 }
 
+#[tokio::test]
+async fn bluetooth_connect_route_is_not_exposed() {
+    let resp = app()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/device/bluetooth/connect")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({ "address": "AA:BB:CC:DD:EE:FF" })).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn bluetooth_disconnect_route_is_not_exposed() {
+    let resp = app()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/device/bluetooth/disconnect")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
 // ---------------------------------------------------------------------------
 // /profiles CRUD
 // ---------------------------------------------------------------------------

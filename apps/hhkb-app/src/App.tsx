@@ -7,12 +7,14 @@ import { KeyDetailPanel } from './components/KeyDetailPanel';
 import { DaemonBanner } from './components/DaemonBanner';
 import { SyncBanner } from './components/SyncBanner';
 import { DipSwitchDisplay } from './components/DipSwitchDisplay';
+import { BluetoothPanel } from './components/BluetoothPanel';
 import { EmptyState } from './components/EmptyState';
 import { EventLog } from './components/EventLog';
 import { useDeviceStore } from './store/deviceStore';
 import { useDaemonStore } from './store/daemonStore';
 import { useProfileStore } from './store/profileStore';
 import { useKeyboardThemeStore } from './store/keyboardThemeStore';
+import { useKanataStore } from './store/kanataStore';
 
 export default function App() {
   const deviceStatus = useDeviceStore((s) => s.status);
@@ -22,6 +24,8 @@ export default function App() {
   const daemonStatus = useDaemonStore((s) => s.status);
   const events = useDaemonStore((s) => s.events);
   const loadProfilesFromDaemon = useProfileStore((s) => s.loadFromDaemon);
+  const startKanataPoll = useKanataStore((s) => s.startPolling);
+  const stopKanataPoll = useKanataStore((s) => s.stopPolling);
 
   const lastEventCountRef = useRef(0);
 
@@ -41,6 +45,16 @@ export default function App() {
       void loadProfilesFromDaemon();
     }
   }, [daemonStatus, loadProfilesFromDaemon]);
+
+  // Start/stop kanata polling based on daemon availability.
+  useEffect(() => {
+    if (daemonStatus === 'online') {
+      startKanataPoll();
+    } else {
+      stopKanataPoll();
+    }
+    return () => stopKanataPoll();
+  }, [daemonStatus, startKanataPoll, stopKanataPoll]);
 
   // Refresh profiles on `profile_changed` WebSocket events.
   useEffect(() => {
@@ -62,14 +76,14 @@ export default function App() {
       <SyncBanner />
 
       <Box maxW="1280px" w="100%" mx="auto" px={{ base: 4, md: 6 }} py={6}>
-        {deviceStatus === 'connected' ? (
-          <Flex
-            gap={6}
-            direction={{ base: 'column', xl: 'row' }}
-            align="stretch"
-          >
-            {/* ---- Left: keyboard + controls ---- */}
-            <Box flex="1 1 auto" minW={0}>
+        <Flex
+          gap={6}
+          direction={{ base: 'column', xl: 'row' }}
+          align="stretch"
+        >
+          {/* ---- Left: keyboard + controls (or empty state) ---- */}
+          <Box flex="1 1 auto" minW={0}>
+            {deviceStatus === 'connected' ? (
               <VStack align="stretch" spacing={4}>
                 {/* Title + transport badge */}
                 <Flex align="center" justify="space-between" pt={1}>
@@ -124,22 +138,27 @@ export default function App() {
                   onSelect={setSelectedIndex}
                 />
               </VStack>
-            </Box>
+            ) : (
+              <EmptyState />
+            )}
+          </Box>
 
-            {/* ---- Right: key detail + dip switches ---- */}
-            <Box w={{ base: '100%', xl: '360px' }} flexShrink={0}>
-              <VStack align="stretch" spacing={4}>
-                <KeyDetailPanel
-                  selectedIndex={selectedIndex}
-                  layer={layer}
-                />
-                <DipSwitchDisplay />
-              </VStack>
-            </Box>
-          </Flex>
-        ) : (
-          <EmptyState />
-        )}
+          {/* ---- Right: always visible when daemon is online ---- */}
+          <Box w={{ base: '100%', xl: '360px' }} flexShrink={0}>
+            <VStack align="stretch" spacing={4}>
+              {deviceStatus === 'connected' && (
+                <>
+                  <KeyDetailPanel
+                    selectedIndex={selectedIndex}
+                    layer={layer}
+                  />
+                  <DipSwitchDisplay />
+                </>
+              )}
+              <BluetoothPanel />
+            </VStack>
+          </Box>
+        </Flex>
       </Box>
 
       <EventLog />

@@ -4,6 +4,7 @@
 //! `main.rs` binary and the integration tests can reuse the same code paths.
 
 pub mod autostart;
+pub mod ble;
 pub mod db;
 pub mod error;
 pub mod flow;
@@ -39,6 +40,15 @@ pub fn build_router(state: AppState) -> Router {
         .route("/device/mode", get(routes::device::get_mode))
         .route("/device/dipsw", get(routes::device::get_dipsw))
         .route("/device/connected", get(routes::device::get_connected))
+        .route("/device/bluetooth", get(routes::bluetooth::get_bluetooth))
+        .route(
+            "/device/bluetooth/scan",
+            post(routes::bluetooth::post_scan),
+        )
+        .route(
+            "/device/bluetooth/devices",
+            get(routes::bluetooth::get_devices),
+        )
         .route(
             "/device/keymap",
             get(routes::keymap::get_keymap).put(routes::keymap::put_keymap),

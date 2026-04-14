@@ -25,10 +25,13 @@ import {
   Plus,
   Camera,
   Factory,
+  Battery,
 } from 'lucide-react';
 import { useProfileStore } from '../store/profileStore';
 import { useDaemonStore } from '../store/daemonStore';
 import { useDeviceStore } from '../store/deviceStore';
+import { useBluetoothStore } from '../store/bluetoothStore';
+import { useKanataStore } from '../store/kanataStore';
 import { ConnectButton } from './ConnectButton';
 import { ProfileImportExport } from './ProfileImportExport';
 import { NewProfileDialog, type NewProfileMode } from './NewProfileDialog';
@@ -44,9 +47,30 @@ export function Header() {
   const daemonVersion = useDaemonStore((s) => s.version);
   const deviceStatus = useDeviceStore((s) => s.status);
   const transport = useDeviceStore((s) => s.transportMode)();
+  const btConnected = useBluetoothStore((s) => s.connected);
+  const battery = useBluetoothStore((s) => s.battery);
+
+  const kanataState = useKanataStore((s) => s.processState);
+  const kanataPid = useKanataStore((s) => s.pid);
+  const kanataInstalled = useKanataStore((s) => s.installed);
+  const kanataLoading = useKanataStore((s) => s.loading);
+  const kanataStart = useKanataStore((s) => s.start);
+  const kanataStop = useKanataStore((s) => s.stop);
 
   const [importOpen, setImportOpen] = useState(false);
   const [newProfileMode, setNewProfileMode] = useState<NewProfileMode | null>(null);
+
+  async function handleKanataToggle() {
+    try {
+      if (kanataState === 'running') {
+        await kanataStop();
+      } else {
+        await kanataStart();
+      }
+    } catch {
+      // errors are tracked in kanataStore.error
+    }
+  }
 
   const daemonMeta =
     daemonStatus === 'online'
@@ -73,6 +97,15 @@ export function Header() {
       : transport === 'daemon'
         ? 'Daemon'
         : 'Disconnected';
+
+  const batteryColor =
+    battery === null
+      ? 'text.muted'
+      : battery >= 50
+        ? 'success'
+        : battery >= 20
+          ? 'warning'
+          : 'error';
 
   const DaemonIcon = daemonMeta.Icon;
 
@@ -254,8 +287,59 @@ export function Header() {
                 >
                   {transportLabel}
                 </Text>
+                {btConnected && battery !== null && (
+                  <>
+                    <Box w="1px" h="12px" bg="border.subtle" />
+                    <Battery size={12} strokeWidth={2.5} color={batteryColor} />
+                    <Text fontSize="10px" color="text.secondary" fontFamily="mono">{battery}%</Text>
+                  </>
+                )}
               </HStack>
             </Tooltip>
+            {kanataInstalled && (
+              <Tooltip
+                label={
+                  kanataState === 'running'
+                    ? `Kanata running · PID ${kanataPid ?? '?'}`
+                    : 'Kanata stopped — click to start'
+                }
+                placement="bottom"
+                hasArrow={false}
+                openDelay={300}
+              >
+                <HStack
+                  as="button"
+                  spacing={1.5}
+                  px={2.5}
+                  h="28px"
+                  borderRadius="sm"
+                  bg="bg.subtle"
+                  border="1px solid"
+                  borderColor="border.subtle"
+                  cursor={kanataLoading ? 'wait' : 'pointer'}
+                  opacity={kanataLoading ? 0.7 : 1}
+                  onClick={() => void handleKanataToggle()}
+                  _hover={{ borderColor: 'border.strong' }}
+                >
+                  <Box
+                    w="6px"
+                    h="6px"
+                    borderRadius="full"
+                    bg={kanataState === 'running' ? 'success' : 'warning'}
+                    flexShrink={0}
+                  />
+                  <Text
+                    fontSize="10px"
+                    color="text.secondary"
+                    fontFamily="mono"
+                    textTransform="uppercase"
+                    letterSpacing="0.06em"
+                  >
+                    Kanata
+                  </Text>
+                </HStack>
+              </Tooltip>
+            )}
             <ConnectButton />
           </HStack>
         </Flex>

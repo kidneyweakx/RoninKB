@@ -223,6 +223,10 @@ export class DaemonClient {
     return requestJson<unknown>(`${this.baseUrl}/device/mode`);
   }
 
+  async bluetooth(): Promise<BluetoothInfo> {
+    return requestJson<BluetoothInfo>(`${this.baseUrl}/device/bluetooth`, {}, 3000);
+  }
+
   async deviceDipsw(): Promise<DipSwitchState> {
     return requestJson<DipSwitchState>(`${this.baseUrl}/device/dipsw`);
   }
@@ -268,6 +272,82 @@ export class DaemonClient {
    */
   async setMode(_mode: string): Promise<void> {
     return;
+  }
+
+  // -------------------------------------------------------------------------
+  // Flow — clipboard sync
+  // -------------------------------------------------------------------------
+
+  async flowConfig(): Promise<FlowConfig> {
+    return requestJson<FlowConfig>(`${this.baseUrl}/flow/config`);
+  }
+
+  async flowUpdateConfig(config: FlowConfig): Promise<FlowConfig> {
+    return requestJson<FlowConfig>(`${this.baseUrl}/flow/config`, {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    });
+  }
+
+  async flowEnable(): Promise<void> {
+    await requestJson<unknown>(`${this.baseUrl}/flow/enable`, { method: 'POST' });
+  }
+
+  async flowDisable(): Promise<void> {
+    await requestJson<unknown>(`${this.baseUrl}/flow/disable`, { method: 'POST' });
+  }
+
+  async flowPeers(): Promise<FlowPeer[]> {
+    const resp = await requestJson<{ peers: FlowPeer[] }>(`${this.baseUrl}/flow/peers`);
+    return resp.peers;
+  }
+
+  async flowAddPeer(hostname: string, addr: string): Promise<FlowPeer> {
+    return requestJson<FlowPeer>(`${this.baseUrl}/flow/peers`, {
+      method: 'POST',
+      body: JSON.stringify({ hostname, addr }),
+    });
+  }
+
+  async flowRemovePeer(id: string): Promise<void> {
+    await requestJson<unknown>(
+      `${this.baseUrl}/flow/peers/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+    );
+  }
+
+  async flowHistory(): Promise<FlowEntry[]> {
+    const resp = await requestJson<{ entries: FlowEntry[] }>(`${this.baseUrl}/flow/history`);
+    return resp.entries;
+  }
+
+  async flowSync(content: string): Promise<FlowEntry> {
+    const resp = await requestJson<{ entry: FlowEntry }>(`${this.baseUrl}/flow/sync`, {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    });
+    return resp.entry;
+  }
+
+  async flowClearHistory(): Promise<void> {
+    await requestJson<unknown>(`${this.baseUrl}/flow/history`, { method: 'DELETE' });
+  }
+
+  // -------------------------------------------------------------------------
+  // BT control
+  // -------------------------------------------------------------------------
+
+  async bluetoothScan(): Promise<BleScanStartedResponse> {
+    return requestJson<BleScanStartedResponse>(
+      `${this.baseUrl}/device/bluetooth/scan`,
+      { method: 'POST' },
+    );
+  }
+
+  async bluetoothDevices(): Promise<BleDevicesResponse> {
+    return requestJson<BleDevicesResponse>(
+      `${this.baseUrl}/device/bluetooth/devices`,
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -326,6 +406,63 @@ export class DaemonClient {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Flow types
+// ---------------------------------------------------------------------------
+
+export interface FlowConfig {
+  enabled: boolean;
+  auto_sync: boolean;
+  instance_id: string;
+  instance_name: string;
+  history_limit: number;
+}
+
+export interface FlowPeer {
+  id: string;
+  hostname: string;
+  addr: string;
+  last_seen: number;
+  online: boolean;
+}
+
+export interface FlowEntry {
+  id: string;
+  content: string;
+  source: { type: 'local' } | { type: 'peer'; peer_id: string; hostname: string };
+  timestamp: number;
+  mime: string;
+}
+
+export interface BluetoothInfo {
+  available: boolean;
+  connected: boolean;
+  name?: string;
+  address?: string;
+  battery?: number;   // 0–100
+  rssi?: number;      // dBm, negative
+}
+
+export interface BleDevice {
+  id: string;
+  name?: string;
+  address: string;
+  battery?: number;
+  connected: boolean;
+  rssi?: number;
+}
+
+export interface BleDevicesResponse {
+  available: boolean;
+  scanning: boolean;
+  devices: BleDevice[];
+}
+
+export interface BleScanStartedResponse {
+  scanning: boolean;
+  message: string;
+}
+
 export interface KanataStatus {
   installed: boolean;
   path?: string;
@@ -356,7 +493,16 @@ export interface DipSwitchState {
 export type DaemonEvent =
   | { type: 'device_connected' }
   | { type: 'device_disconnected' }
-  | { type: 'profile_changed'; id: string };
+  | { type: 'profile_changed'; id: string }
+  | { type: 'kanata_started'; pid: number }
+  | { type: 'kanata_stopped' }
+  | { type: 'kanata_reloaded'; profile_id: string }
+  | { type: 'flow_enabled' }
+  | { type: 'flow_disabled' }
+  | { type: 'flow_peer_discovered'; peer: FlowPeer }
+  | { type: 'flow_peer_lost'; peer_id: string }
+  | { type: 'flow_synced'; entry_id: string; source: FlowEntry['source'] }
+  | { type: 'bluetooth_scan_complete'; devices: BleDevice[] };
 
 export class DaemonWebSocket {
   private ws: WebSocket | null = null;

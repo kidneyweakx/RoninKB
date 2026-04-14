@@ -52,6 +52,10 @@ pub enum DaemonEvent {
     FlowEnabled,
     #[serde(rename = "flow_disabled")]
     FlowDisabled,
+    // -- Bluetooth (BLE via btleplug) ----------------------------------------
+    BluetoothScanComplete {
+        devices: Vec<crate::ble::BleDeviceInfo>,
+    },
 }
 
 pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {

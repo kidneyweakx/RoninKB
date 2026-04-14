@@ -14,6 +14,7 @@ use tokio::sync::{broadcast, Mutex};
 use hhkb_core::device::HhkbDevice;
 use hhkb_core::transport::HidApiTransport;
 
+use crate::ble::BleManager;
 use crate::db;
 use crate::error::{ApiError, ApiResult};
 use crate::flow::FlowManager;
@@ -35,6 +36,8 @@ pub struct AppState {
     /// Flow (cross-device clipboard sync) manager. Not enabled by default;
     /// the caller must POST `/flow/enable` to start it.
     pub flow: Arc<FlowManager>,
+    /// BLE manager for HHKB Hybrid Bluetooth connectivity.
+    pub ble: Arc<BleManager>,
     /// Disables auto-reconnect attempts. Tests set this so they don't
     /// accidentally open a real keyboard attached to the developer's machine.
     pub auto_reconnect: bool,
@@ -80,12 +83,19 @@ impl AppState {
             ))
         });
 
+        let ble = Arc::new(BleManager::new().await);
+
+        // Kick off a 2-second probe immediately so that by the time the
+        // frontend connects, already-paired BLE devices are in the cache.
+        ble.probe_connected(events.clone());
+
         Ok(Self {
             device: Arc::new(Mutex::new(device)),
             db: Arc::new(Mutex::new(conn)),
             events,
             kanata,
             flow: Arc::new(FlowManager::new()),
+            ble,
             auto_reconnect: true,
         })
     }
@@ -110,6 +120,7 @@ impl AppState {
             events,
             kanata,
             flow: Arc::new(FlowManager::new()),
+            ble: Arc::new(BleManager::unavailable()),
             auto_reconnect: false,
         }
     }

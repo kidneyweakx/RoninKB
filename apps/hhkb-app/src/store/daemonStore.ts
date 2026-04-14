@@ -15,6 +15,7 @@ import {
   DaemonEvent,
   DaemonWebSocket,
 } from '../hhkb/daemonClient';
+import { useBluetoothStore } from './bluetoothStore';
 
 export const DAEMON_URL = 'http://localhost:7331';
 export const DAEMON_HEALTH_URL = `${DAEMON_URL}/health`;
@@ -68,6 +69,8 @@ export const useDaemonStore = create<DaemonState>((set, get) => ({
       if (!wasOnline && !ws) {
         ws = new DaemonWebSocket((e) => get().pushEvent(e));
         ws.connect();
+        // Probe for already-connected BLE devices once on transition to online
+        void useBluetoothStore.getState().startScanSilent();
       }
     } catch {
       set({
@@ -112,6 +115,54 @@ export const useDaemonStore = create<DaemonState>((set, get) => ({
       set({ deviceConnected: true });
     } else if (e.type === 'device_disconnected') {
       set({ deviceConnected: false });
+    }
+    if (e.type === 'bluetooth_scan_complete') {
+      useBluetoothStore.getState().onScanComplete(e.devices);
+    }
+    // Profile events
+    if (e.type === 'profile_changed') {
+      void import('./profileStore').then(({ useProfileStore }) => {
+        void useProfileStore.getState().loadFromDaemon();
+      });
+    }
+    // Flow events
+    if (e.type === 'flow_enabled' || e.type === 'flow_disabled') {
+      void import('./flowStore').then(({ useFlowStore }) => {
+        useFlowStore.setState({ enabled: e.type === 'flow_enabled' });
+      });
+    }
+    if (e.type === 'flow_peer_discovered') {
+      void import('./flowStore').then(({ useFlowStore }) => {
+        const s = useFlowStore.getState();
+        useFlowStore.setState({ peers: [...s.peers, e.peer] });
+      });
+    }
+    if (e.type === 'flow_peer_lost') {
+      void import('./flowStore').then(({ useFlowStore }) => {
+        const s = useFlowStore.getState();
+        useFlowStore.setState({ peers: s.peers.filter((p) => p.id !== e.peer_id) });
+      });
+    }
+    if (e.type === 'flow_synced') {
+      void import('./flowStore').then(({ useFlowStore }) => {
+        void useFlowStore.getState().fetchHistory();
+      });
+    }
+    // Kanata events
+    if (e.type === 'kanata_started') {
+      void import('./kanataStore').then(({ useKanataStore }) => {
+        useKanataStore.setState({ processState: 'running', pid: e.pid });
+      });
+    }
+    if (e.type === 'kanata_stopped') {
+      void import('./kanataStore').then(({ useKanataStore }) => {
+        useKanataStore.setState({ processState: 'stopped', pid: null });
+      });
+    }
+    if (e.type === 'kanata_reloaded') {
+      void import('./kanataStore').then(({ useKanataStore }) => {
+        void useKanataStore.getState().fetchStatus();
+      });
     }
     const next = [...get().events, e];
     if (next.length > MAX_EVENTS) next.splice(0, next.length - MAX_EVENTS);
