@@ -143,6 +143,25 @@ async fn bluetooth_disconnect_route_is_not_exposed() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
+#[tokio::test]
+async fn bluetooth_system_route_reports_unavailable_without_adapter() {
+    let resp = app()
+        .oneshot(
+            Request::builder()
+                .uri("/device/bluetooth/system")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_to_json(resp).await;
+    assert_eq!(body["available"], false);
+    assert_eq!(body["source"], "none");
+    assert!(body["devices"].as_array().is_some());
+}
+
 // ---------------------------------------------------------------------------
 // /profiles CRUD
 // ---------------------------------------------------------------------------
@@ -428,6 +447,67 @@ async fn kanata_reload_writes_config_even_when_stopped() {
     let body = body_to_json(resp).await;
     assert!(body["config"].is_string());
     assert!(body["path"].is_string());
+}
+
+#[tokio::test]
+async fn kanata_reload_rejects_invalid_config() {
+    let resp = app()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/kanata/reload")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "config": "(deflayer base a)\n"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = body_to_json(resp).await;
+    assert_eq!(body["error"], "invalid_config");
+}
+
+#[tokio::test]
+async fn profile_create_rejects_invalid_kanata_config() {
+    let resp = app()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/profiles")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "name": "Bad Kanata",
+                        "vendorId": "0x04FE",
+                        "productId": "0x0021",
+                        "layers": [["KC_ESC"]],
+                        "_roninKB": {
+                          "version": "1.0",
+                          "profile": {
+                            "id": "550e8400-e29b-41d4-a716-446655440000",
+                            "name": "Bad Kanata",
+                            "tags": []
+                          },
+                          "software": {
+                            "engine": "kanata",
+                            "config": "(deflayer base a)"
+                          }
+                        }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = body_to_json(resp).await;
+    assert_eq!(body["error"], "invalid_config");
 }
 
 #[tokio::test]

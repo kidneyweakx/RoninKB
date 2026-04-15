@@ -14,8 +14,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
     if std::env::var("CARGO_FEATURE_EMBEDDED_UI").is_ok() {
-        let manifest_dir =
-            std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+        let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
         let dist = manifest_dir
             .parent()
             .and_then(|p| p.parent())

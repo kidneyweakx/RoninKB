@@ -20,7 +20,7 @@ const ZERO_LAYER = new Array<number>(128).fill(0);
  * This is the mode HHKB ships in out of the box.
  */
 export const FACTORY_DEFAULT_MAC: Profile = {
-  id: 'hhkb-factory-default-mac',
+  id: 'a3bb189e-8bf9-3888-9f80-919bac5e6900',
   name: 'HHKB Factory Default (Mac)',
   icon: 'factory',
   tags: ['factory', 'mac'],
@@ -33,7 +33,7 @@ export const FACTORY_DEFAULT_MAC: Profile = {
     _roninKB: {
       version: '1.0',
       profile: {
-        id: 'hhkb-factory-default-mac',
+        id: 'a3bb189e-8bf9-3888-9f80-919bac5e6900',
         name: 'HHKB Factory Default (Mac)',
         icon: 'factory',
         tags: ['factory', 'mac'],

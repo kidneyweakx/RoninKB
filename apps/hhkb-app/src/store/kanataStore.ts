@@ -15,7 +15,11 @@ interface KanataState {
   installed: boolean;
   processState: KanataProcessState;
   pid: number | null;
+  binaryPath: string | null;
   configPath: string | null;
+  inputMonitoringGranted: boolean | null;
+  devicePath: string | null;
+  stderrTail: string[];
   loading: boolean;
   error: string | null;
 
@@ -32,7 +36,11 @@ export const useKanataStore = create<KanataState>((set, get) => ({
   installed: false,
   processState: 'not_installed',
   pid: null,
+  binaryPath: null,
   configPath: null,
+  inputMonitoringGranted: null,
+  devicePath: null,
+  stderrTail: [],
   loading: false,
   error: null,
 
@@ -50,7 +58,12 @@ export const useKanataStore = create<KanataState>((set, get) => ({
         installed: raw.installed,
         processState,
         pid: raw.pid ?? null,
+        binaryPath: raw.binaryPath ?? null,
         configPath: raw.path ?? null,
+        inputMonitoringGranted: raw.inputMonitoringGranted ?? null,
+        devicePath: raw.devicePath ?? null,
+        stderrTail: raw.stderrTail ?? [],
+        error: raw.lastError ?? null,
       });
     } catch (e) {
       set({ error: e instanceof Error ? e.message : String(e) });

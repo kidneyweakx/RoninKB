@@ -33,6 +33,9 @@ export function BluetoothPanel() {
   const rssi = useBluetoothStore((s) => s.rssi);
   const scanning = useBluetoothStore((s) => s.scanning);
   const devices = useBluetoothStore((s) => s.devices);
+  const systemConnectedDevices = useBluetoothStore((s) => s.systemConnectedDevices);
+  const systemSource = useBluetoothStore((s) => s.systemSource);
+  const systemMessage = useBluetoothStore((s) => s.systemMessage);
 
   useEffect(() => {
     if (daemonStatus === 'online') void fetch();
@@ -141,6 +144,53 @@ export function BluetoothPanel() {
       )}
 
       {/* Scan results */}
+      {isOnline && available && systemConnectedDevices.length > 0 && (
+        <VStack align="stretch" spacing={1}>
+          <Text fontSize="10px" color="text.muted" fontFamily="mono" textTransform="uppercase" letterSpacing="0.08em">
+            macOS connected ({systemConnectedDevices.length})
+          </Text>
+          {systemConnectedDevices.map((d, i) => {
+            const addressLabel = d.address && d.address !== '00:00:00:00:00:00'
+              ? d.address
+              : 'address hidden';
+            const extras = [d.kind, d.battery != null ? `${d.battery}%` : null]
+              .filter(Boolean)
+              .join(' · ');
+            return (
+              <HStack
+                key={`${d.name}-${d.address ?? 'na'}-${i}`}
+                justify="space-between"
+                bg="bg.elevated"
+                border="1px solid"
+                borderColor="border.muted"
+                borderRadius="md"
+                p={2}
+              >
+                <VStack align="flex-start" spacing={0}>
+                  <Text fontSize="xs" color="text.primary">{d.name}</Text>
+                  <Text fontSize="10px" color="text.muted" fontFamily="mono">
+                    {extras ? `${addressLabel} · ${extras}` : addressLabel}
+                  </Text>
+                </VStack>
+                <Badge variant="subtle" colorScheme="blue">macOS</Badge>
+              </HStack>
+            );
+          })}
+        </VStack>
+      )}
+
+      {isOnline && available && systemSource === 'system_profiler' && systemConnectedDevices.length === 0 && (
+        <Text fontSize="10px" color="text.muted" fontFamily="mono" textAlign="center">
+          No connected devices reported by macOS
+        </Text>
+      )}
+
+      {isOnline && available && systemMessage && systemConnectedDevices.length === 0 && (
+        <Text fontSize="10px" color="text.muted" fontFamily="mono" textAlign="center">
+          {systemMessage}
+        </Text>
+      )}
+
       {isOnline && available && devices.length > 0 && (
         <VStack align="stretch" spacing={1}>
           <Text fontSize="10px" color="text.muted" fontFamily="mono" textTransform="uppercase" letterSpacing="0.08em">
@@ -151,7 +201,10 @@ export function BluetoothPanel() {
             // On macOS addresses are always 00:00:00:00:00:00 — use UUID
             const displayName = d.name
               ?? (d.connected ? 'Unknown (connected)' : 'Unknown');
-            const subLabel = d.rssi != null ? `${d.rssi} dBm` : '';
+            const idLabel = d.address && d.address !== '00:00:00:00:00:00'
+              ? d.address
+              : d.id;
+            const subLabel = d.rssi != null ? `${d.rssi} dBm · ${idLabel}` : idLabel;
             // Dim nameless, unconnected, non-HHKB devices
             const dimmed = !d.name && !d.connected;
             return (

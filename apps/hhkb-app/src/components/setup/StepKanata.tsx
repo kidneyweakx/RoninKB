@@ -116,7 +116,7 @@ export function StepKanata() {
             </Text>
             <Text fontSize="xs" color="text.muted">
               {installed
-                ? status?.path ?? 'Detected by daemon'
+                ? status?.binaryPath ?? 'Detected by daemon'
                 : 'The daemon could not find kanata on your PATH.'}
             </Text>
             {installed && status?.version && (
@@ -141,6 +141,21 @@ export function StepKanata() {
         <Alert status="error" borderRadius="md" fontSize="xs">
           <AlertIcon />
           {error}
+        </Alert>
+      )}
+
+      {status?.inputMonitoringGranted === false && (
+        <Alert status="warning" borderRadius="md" fontSize="xs">
+          <AlertIcon />
+          macOS Input Monitoring / Accessibility permission is required for kanata.
+          Open System Settings → Privacy & Security → Input Monitoring.
+        </Alert>
+      )}
+
+      {status?.lastError && (
+        <Alert status="error" borderRadius="md" fontSize="xs">
+          <AlertIcon />
+          {status.lastError}
         </Alert>
       )}
 

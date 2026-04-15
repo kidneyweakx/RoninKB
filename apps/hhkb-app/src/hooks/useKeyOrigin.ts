@@ -10,6 +10,7 @@
 import { useMemo } from 'react';
 import { useDeviceStore } from '../store/deviceStore';
 import { useDaemonStore } from '../store/daemonStore';
+import { useKanataStore } from '../store/kanataStore';
 import { useProfileStore } from '../store/profileStore';
 import {
   computeKeyOrigin,
@@ -46,19 +47,23 @@ export function useKeyOrigin(
   const baseKeymap = useDeviceStore((s) => s.baseKeymap);
   const fnKeymap = useDeviceStore((s) => s.fnKeymap);
   const daemonStatus = useDaemonStore((s) => s.status);
+  const kanataState = useKanataStore((s) => s.processState);
   const { config } = useActiveSoftwareConfig();
 
   return useMemo(() => {
     if (keyIndex === null) return null;
+    const daemonOnline = daemonStatus === 'online';
+    const softwareActive = daemonOnline && kanataState === 'running';
     return computeKeyOrigin(
       keyIndex,
       layer,
       baseKeymap?.asBytes() ?? null,
       fnKeymap?.asBytes() ?? null,
       config,
-      daemonStatus === 'online',
+      daemonOnline,
+      softwareActive,
     );
-  }, [keyIndex, layer, baseKeymap, fnKeymap, config, daemonStatus]);
+  }, [keyIndex, layer, baseKeymap, fnKeymap, config, daemonStatus, kanataState]);
 }
 
 /**
@@ -69,9 +74,14 @@ export function useKeyOrigin(
  */
 export function useHasSoftwareOverride(): (keyIndex: number) => boolean {
   const { parsed } = useActiveSoftwareConfig();
+  const daemonOnline = useDaemonStore((s) => s.status === 'online');
+  const kanataRunning = useKanataStore((s) => s.processState === 'running');
   return useMemo(() => {
+    if (!daemonOnline || !kanataRunning) {
+      return () => false;
+    }
     return (keyIndex: number) => hasSoftwareOverride(keyIndex, parsed);
-  }, [parsed]);
+  }, [parsed, daemonOnline, kanataRunning]);
 }
 
 /**

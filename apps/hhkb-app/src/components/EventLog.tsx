@@ -8,10 +8,35 @@ import { ChevronUp, ChevronDown, Terminal, Trash2 } from 'lucide-react';
 import { useDaemonStore } from '../store/daemonStore';
 
 function formatEvent(e: { type: string } & Record<string, unknown>): string {
-  if (e.type === 'profile_changed' && 'id' in e) {
-    return `profile_changed id=${String(e.id)}`;
+  switch (e.type) {
+    case 'device_connected':     return 'device connected';
+    case 'device_disconnected':  return 'device disconnected';
+    case 'profile_changed':      return `profile_changed id=${String(e.id)}`;
+    case 'kanata_started':       return `kanata started pid=${String(e.pid)}`;
+    case 'kanata_stopped':       return 'kanata stopped';
+    case 'kanata_reloaded': {
+      const pid = e.profile_id ? ` profile=${String(e.profile_id).slice(0, 8)}` : '';
+      return `kanata reloaded${pid}`;
+    }
+    case 'flow_enabled':         return 'flow enabled';
+    case 'flow_disabled':        return 'flow disabled';
+    case 'flow_peer_discovered': {
+      const peer = e.peer as { hostname?: string } | undefined;
+      return `flow peer+ ${peer?.hostname ?? '?'}`;
+    }
+    case 'flow_peer_lost':       return `flow peer- ${String(e.peer_id).slice(0, 8)}`;
+    case 'flow_synced':          return `flow synced ${String(e.entry_id).slice(0, 8)}`;
+    case 'bluetooth_scan_complete': {
+      const devices = e.devices as unknown[];
+      return `bt scan done (${devices.length} found)`;
+    }
+    case 'bluetooth_connected': {
+      const dev = e.device as { name?: string; address?: string } | undefined;
+      return `bt connected ${dev?.name ?? dev?.address ?? '?'}`;
+    }
+    case 'bluetooth_disconnected': return 'bt disconnected';
+    default:                     return e.type;
   }
-  return e.type;
 }
 
 export function EventLog() {

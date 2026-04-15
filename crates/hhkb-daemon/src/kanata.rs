@@ -13,9 +13,12 @@
 //! Callers should poll [`KanataManager::check_alive`] if they need to observe
 //! crashes.
 
+use std::collections::VecDeque;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::process::{Child, ChildStderr, Command, ExitStatus, Stdio};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use directories::ProjectDirs;
 use serde::Serialize;
@@ -39,6 +42,9 @@ pub struct KanataManager {
     binary_path: Option<PathBuf>,
     config_path: PathBuf,
     process: Mutex<Option<Child>>,
+    stderr_tail: Arc<Mutex<VecDeque<String>>>,
+    last_error: Arc<Mutex<Option<String>>>,
+    last_device_path: Arc<Mutex<Option<String>>>,
 }
 
 impl KanataManager {
@@ -65,6 +71,9 @@ impl KanataManager {
             binary_path,
             config_path,
             process: Mutex::new(None),
+            stderr_tail: Arc::new(Mutex::new(VecDeque::new())),
+            last_error: Arc::new(Mutex::new(None)),
+            last_device_path: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -77,6 +86,9 @@ impl KanataManager {
             binary_path,
             config_path,
             process: Mutex::new(None),
+            stderr_tail: Arc::new(Mutex::new(VecDeque::new())),
+            last_error: Arc::new(Mutex::new(None)),
+            last_device_path: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -88,6 +100,53 @@ impl KanataManager {
     /// Returns `true` if a kanata binary was detected at construction time.
     pub fn is_installed(&self) -> bool {
         self.binary_path.is_some()
+    }
+
+    /// Absolute path to the detected kanata binary, when installed.
+    pub fn binary_path(&self) -> Option<PathBuf> {
+        self.binary_path.clone()
+    }
+
+    /// Tail of stderr lines collected from the child process.
+    pub fn stderr_tail(&self, max_lines: usize) -> Vec<String> {
+        let guard = self
+            .stderr_tail
+            .lock()
+            .expect("kanata stderr mutex poisoned");
+        let take = max_lines.min(guard.len());
+        guard
+            .iter()
+            .skip(guard.len().saturating_sub(take))
+            .cloned()
+            .collect()
+    }
+
+    /// Last start/runtime error captured by the manager.
+    pub fn last_error(&self) -> Option<String> {
+        self.last_error
+            .lock()
+            .expect("kanata error mutex poisoned")
+            .clone()
+    }
+
+    /// Linux-only `--device` path used for the current or most recent start.
+    pub fn last_device_path(&self) -> Option<String> {
+        self.last_device_path
+            .lock()
+            .expect("kanata device mutex poisoned")
+            .clone()
+    }
+
+    /// macOS Input Monitoring / Accessibility preflight status.
+    pub fn input_monitoring_granted(&self) -> Option<bool> {
+        #[cfg(target_os = "macos")]
+        {
+            return Some(macos_input_monitoring_granted());
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
     }
 
     /// Current status. Does *not* poll the child — use [`check_alive`] for
@@ -138,10 +197,21 @@ impl KanataManager {
     /// [`ApiError::KanataAlreadyRunning`] if the manager is already tracking
     /// a live child.
     pub fn start(&self) -> Result<u32, ApiError> {
+        const STARTUP_GRACE_MS: u64 = 120;
+
         let binary = self
             .binary_path
             .as_ref()
             .ok_or(ApiError::KanataNotInstalled)?;
+
+        #[cfg(target_os = "macos")]
+        if !macos_input_monitoring_granted() {
+            let msg = "macOS Input Monitoring / Accessibility permission is required for kanata. \
+Open System Settings -> Privacy & Security -> Input Monitoring, then allow RoninKB/kanata."
+                .to_string();
+            self.set_last_error(Some(msg.clone()));
+            return Err(ApiError::KanataPermissionRequired(msg));
+        }
 
         let mut guard = self.process.lock().expect("kanata process mutex poisoned");
         if guard.is_some() {
@@ -153,16 +223,47 @@ impl KanataManager {
             std::fs::write(&self.config_path, "")?;
         }
 
-        let child = Command::new(binary)
-            .arg("--cfg")
+        self.clear_diagnostics();
+
+        let mut cmd = Command::new(binary);
+        cmd.arg("--cfg")
             .arg(&self.config_path)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?;
+            .stderr(Stdio::piped());
+
+        #[cfg(target_os = "linux")]
+        {
+            let device = detect_linux_device_path().ok_or_else(|| {
+                ApiError::KanataDeviceUnavailable(
+                    "failed to resolve keyboard event device. Set RONINKB_KANATA_DEVICE=/dev/input/eventX"
+                        .to_string(),
+                )
+            })?;
+            self.set_last_device_path(Some(device.display().to_string()));
+            cmd.arg("--device").arg(device);
+        }
+        #[cfg(not(target_os = "linux"))]
+        self.set_last_device_path(None);
+
+        let mut child = cmd.spawn()?;
+        if let Some(stderr) = child.stderr.take() {
+            Self::spawn_stderr_pump(stderr, Arc::clone(&self.stderr_tail));
+        }
+
+        std::thread::sleep(Duration::from_millis(STARTUP_GRACE_MS));
+
+        if let Some(status) = child.try_wait()? {
+            let msg = self.compose_exit_diagnostic(status);
+            self.set_last_error(Some(msg.clone()));
+            tracing::warn!(status = ?status, "{msg}");
+            *guard = None;
+            return Err(ApiError::Internal(msg));
+        }
 
         let pid = child.id();
         tracing::info!(pid, path = %binary.display(), "spawned kanata");
+        self.set_last_error(None);
         *guard = Some(child);
         Ok(pid)
     }
@@ -246,16 +347,74 @@ impl KanataManager {
         };
         match child.try_wait() {
             Ok(Some(status)) => {
-                tracing::warn!(?status, "kanata exited");
+                let msg = self.compose_exit_diagnostic(status);
+                self.set_last_error(Some(msg.clone()));
+                tracing::warn!(?status, "{msg}");
                 *guard = None;
                 KanataStatus::Stopped
             }
             Ok(None) => KanataStatus::Running { pid: child.id() },
             Err(e) => {
                 tracing::warn!(%e, "kanata try_wait failed");
+                self.set_last_error(Some(format!("kanata try_wait failed: {e}")));
                 KanataStatus::Running { pid: child.id() }
             }
         }
+    }
+
+    fn clear_diagnostics(&self) {
+        if let Ok(mut tail) = self.stderr_tail.lock() {
+            tail.clear();
+        }
+        if let Ok(mut err) = self.last_error.lock() {
+            *err = None;
+        }
+    }
+
+    fn set_last_error(&self, value: Option<String>) {
+        if let Ok(mut guard) = self.last_error.lock() {
+            *guard = value;
+        }
+    }
+
+    fn set_last_device_path(&self, value: Option<String>) {
+        if let Ok(mut guard) = self.last_device_path.lock() {
+            *guard = value;
+        }
+    }
+
+    fn compose_exit_diagnostic(&self, status: ExitStatus) -> String {
+        let mut msg = format!("kanata exited immediately with status {status}");
+        let tail = self.stderr_tail(8);
+        if !tail.is_empty() {
+            msg.push_str(". stderr: ");
+            msg.push_str(&tail.join(" | "));
+        }
+        #[cfg(target_os = "macos")]
+        if !macos_input_monitoring_granted() {
+            msg.push_str(
+                ". Hint: grant Input Monitoring / Accessibility permission in System Settings.",
+            );
+        }
+        msg
+    }
+
+    fn spawn_stderr_pump(stderr: ChildStderr, tail: Arc<Mutex<VecDeque<String>>>) {
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines() {
+                let Ok(line) = line else {
+                    break;
+                };
+                if let Ok(mut guard) = tail.lock() {
+                    guard.push_back(line.clone());
+                    while guard.len() > 120 {
+                        let _ = guard.pop_front();
+                    }
+                }
+                tracing::debug!("kanata stderr: {line}");
+            }
+        });
     }
 }
 
@@ -307,6 +466,57 @@ fn default_config_path() -> Result<PathBuf, ApiError> {
         .join("share")
         .join("roninKB")
         .join("active.kbd"))
+}
+
+#[cfg(target_os = "linux")]
+fn detect_linux_device_path() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("RONINKB_KANATA_DEVICE") {
+        let p = PathBuf::from(path);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+
+    let by_id = Path::new("/dev/input/by-id");
+    if let Ok(entries) = std::fs::read_dir(by_id) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if name.ends_with("-event-kbd") && path.is_file() {
+                return Some(path);
+            }
+        }
+    }
+
+    let input = Path::new("/dev/input");
+    if let Ok(entries) = std::fs::read_dir(input) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if name.starts_with("event") && path.is_file() {
+                return Some(path);
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn macos_input_monitoring_granted() -> bool {
+    // SAFETY: pure preflight API, no ownership crossing.
+    unsafe { cg_preflight_listen_event_access() }
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "ApplicationServices", kind = "framework")]
+unsafe extern "C" {
+    #[link_name = "CGPreflightListenEventAccess"]
+    fn cg_preflight_listen_event_access() -> bool;
 }
 
 // ---------------------------------------------------------------------------

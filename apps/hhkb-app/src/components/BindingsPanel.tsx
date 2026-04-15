@@ -32,6 +32,7 @@ import {
 import { Check, Pencil, Plus, Trash2, X } from 'lucide-react';
 import { HHKB_LAYOUT } from '../data/hhkbLayout';
 import { useDaemonStore } from '../store/daemonStore';
+import { useKanataStore } from '../store/kanataStore';
 import { useProfileStore } from '../store/profileStore';
 import {
   KEYCODES,
@@ -73,7 +74,7 @@ function applyConfigToProfile(via: ViaProfile, config: string): ViaProfile {
   const cloned: ViaProfile = JSON.parse(JSON.stringify(via)) as ViaProfile;
   const ext: RoninExtension = cloned._roninKB ?? {
     version: '1',
-    profile: { id: 'local', name: cloned.name },
+    profile: { id: crypto.randomUUID(), name: cloned.name },
   };
   ext.software = {
     engine: ext.software?.engine ?? 'kanata',
@@ -108,6 +109,8 @@ export function BindingsPanel({ focusKeyIndex, onSaved, onCancel }: Props) {
   const activeProfile = useProfileStore((s) => s.getActive)();
   const daemonStatus = useDaemonStore((s) => s.status);
   const daemonClient = useDaemonStore((s) => s.client);
+  const kanataProcessState = useKanataStore((s) => s.processState);
+  const kanataStart = useKanataStore((s) => s.start);
 
   const initialConfig = useMemo(
     () => activeProfile?.via._roninKB?.software?.config ?? '',
@@ -198,18 +201,68 @@ export function BindingsPanel({ focusKeyIndex, onSaved, onCancel }: Props) {
 
       if (daemonStatus === 'online' && daemonClient) {
         await daemonClient.updateProfile(activeProfile.id, nextVia);
-        await daemonClient.kanataReload(config);
+
+        // Ensure kanata is running before attempting reload.
+        // If it's stopped (but installed), auto-start it so the bindings
+        // take effect immediately.
+        if (kanataProcessState === 'stopped') {
+          try {
+            await kanataStart();
+          } catch {
+            // kanataStart throws on failure; show a warning but don't abort save
+            toast({
+              title: 'Kanata not started',
+              description: 'Bindings saved, but kanata failed to start. Start it manually in Settings.',
+              status: 'warning',
+              duration: 5000,
+              isClosable: true,
+            });
+            await useProfileStore.getState().loadFromDaemon();
+            onSaved?.();
+            return;
+          }
+        }
+
+        if (kanataProcessState !== 'not_installed') {
+          try {
+            await daemonClient.kanataReload(config);
+          } catch (e) {
+            // Reload failed — bindings are saved to disk but not active.
+            toast({
+              title: 'Bindings saved — kanata reload failed',
+              description: e instanceof Error ? e.message : String(e),
+              status: 'warning',
+              duration: 5000,
+              isClosable: true,
+            });
+            await useProfileStore.getState().loadFromDaemon();
+            onSaved?.();
+            return;
+          }
+        }
+
         await useProfileStore.getState().loadFromDaemon();
+        toast({
+          title: kanataProcessState === 'not_installed'
+            ? 'Bindings saved (kanata not installed)'
+            : 'Bindings saved & applied',
+          status: 'success',
+          duration: 2000,
+        });
       } else {
-        // Daemon offline — persist locally so the change survives a page reload
+        // Daemon offline — persist locally
         useProfileStore.setState((s) => ({
           profiles: s.profiles.map((p) =>
             p.id === activeProfile.id ? { ...p, via: nextVia } : p,
           ),
         }));
+        toast({
+          title: 'Bindings saved locally',
+          description: 'Reconnect to daemon to apply to kanata.',
+          status: 'info',
+          duration: 3000,
+        });
       }
-
-      toast({ title: 'Bindings saved', status: 'success', duration: 2000 });
       onSaved?.();
     } catch (e) {
       toast({

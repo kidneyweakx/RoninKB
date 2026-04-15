@@ -12,6 +12,7 @@ import {
   Text,
   Tag,
   Tooltip,
+  useColorModeValue,
 } from '@chakra-ui/react';
 import {
   Command,
@@ -106,6 +107,9 @@ export function Header() {
         : battery >= 20
           ? 'warning'
           : 'error';
+  const logoBg = useColorModeValue('bg.subtle', 'accent.primary');
+  const logoColor = useColorModeValue('text.secondary', 'accent.fg');
+  const logoBorderColor = useColorModeValue('border.subtle', 'transparent');
 
   const DaemonIcon = daemonMeta.Icon;
 
@@ -144,8 +148,10 @@ export function Header() {
               w="28px"
               h="28px"
               borderRadius="md"
-              bg="accent.primary"
-              color="accent.fg"
+              bg={logoBg}
+              color={logoColor}
+              border="1px solid"
+              borderColor={logoBorderColor}
             >
               <Command size={16} strokeWidth={2.25} />
             </Flex>

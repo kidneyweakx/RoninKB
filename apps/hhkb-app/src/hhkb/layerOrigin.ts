@@ -123,6 +123,7 @@ export function hasSoftwareOverride(
  * @param fnBytes The 128-byte Fn layer read from the device.
  * @param softwareConfig The active profile's kanata text (may be empty).
  * @param daemonOnline Whether the daemon is currently reachable.
+ * @param softwareActive Whether kanata is currently running.
  */
 export function computeKeyOrigin(
   keyIndex: number,
@@ -131,6 +132,7 @@ export function computeKeyOrigin(
   fnBytes: Uint8Array | null,
   softwareConfig: string | null | undefined,
   daemonOnline: boolean,
+  softwareActive: boolean,
 ): LayerOrigin {
   const bytes = layer === 'base' ? baseBytes : fnBytes;
   const raw = bytes ? (bytes[keyIndex] ?? 0) : 0;
@@ -145,8 +147,8 @@ export function computeKeyOrigin(
     return daemonOnline ? 'flow' : null;
   }
 
-  // Software override: only meaningful when the daemon is online.
-  if (daemonOnline && softwareConfig) {
+  // Software override is only active while kanata is running.
+  if (softwareActive && softwareConfig) {
     const parsed = parseKanataConfig(softwareConfig);
     if (hasSoftwareOverride(keyIndex, parsed)) {
       return 'sw';

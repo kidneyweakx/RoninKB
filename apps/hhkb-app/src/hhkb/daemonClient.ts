@@ -350,6 +350,12 @@ export class DaemonClient {
     );
   }
 
+  async bluetoothSystemDevices(): Promise<SystemBluetoothDevicesResponse> {
+    return requestJson<SystemBluetoothDevicesResponse>(
+      `${this.baseUrl}/device/bluetooth/system`,
+    );
+  }
+
   // -------------------------------------------------------------------------
   // Kanata supervisor
   // -------------------------------------------------------------------------
@@ -357,15 +363,25 @@ export class DaemonClient {
   async kanataStatus(): Promise<KanataStatus> {
     const raw = await requestJson<{
       installed: boolean;
+      binary_path?: string;
       config_path?: string;
       state?: string;
       pid?: number;
+      input_monitoring_granted?: boolean | null;
+      last_error?: string | null;
+      stderr_tail?: string[];
+      device_path?: string | null;
     }>(`${this.baseUrl}/kanata/status`);
     return {
       installed: raw.installed,
+      binaryPath: raw.binary_path,
       path: raw.config_path,
       state: raw.state,
       pid: raw.pid,
+      inputMonitoringGranted: raw.input_monitoring_granted ?? null,
+      lastError: raw.last_error ?? null,
+      stderrTail: raw.stderr_tail ?? [],
+      devicePath: raw.device_path ?? null,
     };
   }
 
@@ -458,6 +474,21 @@ export interface BleDevicesResponse {
   devices: BleDevice[];
 }
 
+export interface SystemBluetoothDevice {
+  name: string;
+  address?: string | null;
+  kind?: string | null;
+  battery?: number | null;
+  services?: string | null;
+}
+
+export interface SystemBluetoothDevicesResponse {
+  available: boolean;
+  source: string;
+  devices: SystemBluetoothDevice[];
+  message?: string | null;
+}
+
 export interface BleScanStartedResponse {
   scanning: boolean;
   message: string;
@@ -465,10 +496,15 @@ export interface BleScanStartedResponse {
 
 export interface KanataStatus {
   installed: boolean;
+  binaryPath?: string;
   path?: string;
   version?: string;
   state?: string;
   pid?: number;
+  inputMonitoringGranted?: boolean | null;
+  lastError?: string | null;
+  stderrTail?: string[];
+  devicePath?: string | null;
 }
 
 /**

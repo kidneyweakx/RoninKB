@@ -182,7 +182,10 @@ impl BleManager {
             }
             let props = p.properties().await.ok().flatten();
             let name = props.as_ref().and_then(|pr| pr.local_name.clone());
-            let address = props.as_ref().map(|pr| pr.address.to_string()).unwrap_or_default();
+            let address = props
+                .as_ref()
+                .map(|pr| pr.address.to_string())
+                .unwrap_or_default();
             if !matches_hhkb_candidate(&p, &address, name.as_deref(), &known_devices) {
                 continue;
             }
@@ -221,7 +224,10 @@ async fn do_scan(adapter: &Adapter, duration_secs: u64) -> Vec<BleDeviceInfo> {
         }
     };
 
-    tracing::info!("ble: {} peripheral(s) visible after scan", peripherals.len());
+    tracing::info!(
+        "ble: {} peripheral(s) visible after scan",
+        peripherals.len()
+    );
     let mut devices = Vec::new();
     for p in peripherals {
         let props = match p.properties().await {
@@ -272,9 +278,7 @@ async fn do_scan(adapter: &Adapter, duration_secs: u64) -> Vec<BleDeviceInfo> {
 
 async fn read_battery(peripheral: &Peripheral) -> Option<u8> {
     let chars = peripheral.characteristics();
-    let bat = chars
-        .iter()
-        .find(|c| c.uuid == battery_char_uuid())?;
+    let bat = chars.iter().find(|c| c.uuid == battery_char_uuid())?;
     peripheral.read(bat).await.ok()?.first().copied()
 }
 
@@ -294,8 +298,7 @@ fn matches_hhkb_candidate(
 
     known_devices.iter().any(|device| {
         let same_id = device.id == peripheral.id().to_string();
-        let same_address =
-            !address.is_empty() && device.address.eq_ignore_ascii_case(address);
+        let same_address = !address.is_empty() && device.address.eq_ignore_ascii_case(address);
         (same_id || same_address) && is_hhkb_name(device.name.as_deref())
     })
 }

@@ -98,12 +98,12 @@ describe('computeKeyOrigin', () => {
   const fnBytes = makeBytes();
 
   it('returns hw when only the EEPROM byte is non-zero', () => {
-    const origin = computeKeyOrigin(1, 'base', baseBytes, fnBytes, '', false);
+    const origin = computeKeyOrigin(1, 'base', baseBytes, fnBytes, '', false, false);
     expect(origin).toBe('hw');
   });
 
   it('returns null for a firmware-default key', () => {
-    const origin = computeKeyOrigin(2, 'base', baseBytes, fnBytes, '', false);
+    const origin = computeKeyOrigin(2, 'base', baseBytes, fnBytes, '', false, false);
     expect(origin).toBe(null);
   });
 
@@ -113,7 +113,7 @@ describe('computeKeyOrigin', () => {
       (deflayer base esc _ _)
     `;
     // keyIndex 1 → pos 0 → "esc" → sw
-    const origin = computeKeyOrigin(1, 'base', baseBytes, fnBytes, cfg, true);
+    const origin = computeKeyOrigin(1, 'base', baseBytes, fnBytes, cfg, true, true);
     expect(origin).toBe('sw');
   });
 
@@ -122,17 +122,26 @@ describe('computeKeyOrigin', () => {
       (defsrc a b c)
       (deflayer base esc _ _)
     `;
-    const origin = computeKeyOrigin(1, 'base', baseBytes, fnBytes, cfg, false);
+    const origin = computeKeyOrigin(1, 'base', baseBytes, fnBytes, cfg, false, false);
+    expect(origin).toBe('hw');
+  });
+
+  it('returns hw when daemon is online but kanata is not running', () => {
+    const cfg = `
+      (defsrc a b c)
+      (deflayer base esc _ _)
+    `;
+    const origin = computeKeyOrigin(1, 'base', baseBytes, fnBytes, cfg, true, false);
     expect(origin).toBe('hw');
   });
 
   it('returns flow for the sentinel keycode', () => {
-    const origin = computeKeyOrigin(3, 'base', baseBytes, fnBytes, '', true);
+    const origin = computeKeyOrigin(3, 'base', baseBytes, fnBytes, '', true, false);
     expect(origin).toBe('flow');
   });
 
   it('flow requires daemon online', () => {
-    const origin = computeKeyOrigin(3, 'base', baseBytes, fnBytes, '', false);
+    const origin = computeKeyOrigin(3, 'base', baseBytes, fnBytes, '', false, false);
     expect(origin).toBe(null);
   });
 });

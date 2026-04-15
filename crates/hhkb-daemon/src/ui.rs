@@ -21,10 +21,7 @@ struct EmbeddedUi;
 /// SPA, falling back to `index.html` for client-side routes (HTML5 history
 /// API).
 pub async fn ui_handler(uri: Uri) -> Response {
-    let path = uri
-        .path()
-        .trim_start_matches("/ui")
-        .trim_start_matches('/');
+    let path = uri.path().trim_start_matches("/ui").trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
 
     match EmbeddedUi::get(path) {
@@ -35,10 +32,7 @@ pub async fn ui_handler(uri: Uri) -> Response {
             Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, mime.as_ref())
-                .header(
-                    header::CACHE_CONTROL,
-                    "public, max-age=31536000, immutable",
-                )
+                .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
                 .body(Body::from(file.data.into_owned()))
                 .unwrap()
         }

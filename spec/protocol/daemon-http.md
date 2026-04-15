@@ -90,6 +90,7 @@ Derived from `crates/hhkb-daemon/src/lib.rs:35-90`.
 | GET | `/device/bluetooth` | OS-managed BLE connection state + metadata | — | `BluetoothStatusDto` | — |
 | POST | `/device/bluetooth/scan` | Start 4-second BLE refresh in background | — | `{ scanning: bool, message: string }` | — |
 | GET | `/device/bluetooth/devices` | List scanned HHKB candidates + scan status | — | `{ available: bool, scanning: bool, devices: BleDevice[] }` | — |
+| GET | `/device/bluetooth/system` | List host OS connected Bluetooth devices (macOS) | — | `{ available, source, devices, message? }` | — |
 | GET | `/device/keymap` | Read 128-byte keymap | `?mode=mac&fn_layer=false` | `{ mode, fn_layer, data: [128]u8 }` | `bad_request`, `device_error` |
 | PUT | `/device/keymap` | Write 128-byte keymap | `?mode=mac&fn_layer=false`, body `{ data: u8[128] }` | `{ status: "ok" }` | `bad_request` (len != 128) |
 
@@ -319,6 +320,40 @@ When `connected` is `false`, `name`, `address`, `battery`, and `rssi` are `null`
 This endpoint does not return errors. Failures in the underlying
 BLE adapter query are handled gracefully by returning `{ "connected": false }`
 or `{ "available": false }`.
+
+### 5.8 `GET /device/bluetooth/system`
+
+Returns the host OS Bluetooth connected-device list for UI visibility.
+
+- **macOS**: sourced from `system_profiler SPBluetoothDataType -json`.
+- **other OSes**: returns `source: "unsupported"` and `devices: []`.
+- **BLE unavailable**: returns `available: false`, `source: "none"`, and `devices: []`.
+
+#### Response
+
+```json
+{
+  "available": true,
+  "source": "system_profiler",
+  "devices": [
+    {
+      "name": "HHKB-Hybrid_1",
+      "address": "E0:71:2C:05:3A:BB",
+      "kind": "Keyboard",
+      "battery": 100,
+      "services": "0x400000 < BLE >"
+    }
+  ],
+  "message": null
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `available` | `bool` | Whether BLE is available on this host |
+| `source` | `string` | Device-list backend (`system_profiler`, `unsupported`, `none`) |
+| `devices` | `array` | Currently connected host Bluetooth devices |
+| `message` | `string \| null` | Optional diagnostic text when list is empty/fallback |
 
 ## 6. Authentication
 

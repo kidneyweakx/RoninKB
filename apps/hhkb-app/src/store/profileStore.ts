@@ -178,6 +178,11 @@ export const useProfileStore = create<ProfileState>((set, get) => ({
             profile: { id, name },
           },
         };
+    // Stamp the generated UUID into _roninKB.profile.id so the daemon
+    // always receives a valid UUID regardless of what the template carried.
+    if (via._roninKB) {
+      via._roninKB = { ...via._roninKB, profile: { ...via._roninKB.profile, id } };
+    }
     const profile: Profile = { id, name, tags: [], via };
     await get().addProfile(profile);
     return profile;

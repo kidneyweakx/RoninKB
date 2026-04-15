@@ -9,6 +9,7 @@ pub mod db;
 pub mod error;
 pub mod flow;
 pub mod kanata;
+pub mod kanata_config;
 pub mod routes;
 pub mod state;
 pub mod tray;
@@ -41,13 +42,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/device/dipsw", get(routes::device::get_dipsw))
         .route("/device/connected", get(routes::device::get_connected))
         .route("/device/bluetooth", get(routes::bluetooth::get_bluetooth))
-        .route(
-            "/device/bluetooth/scan",
-            post(routes::bluetooth::post_scan),
-        )
+        .route("/device/bluetooth/scan", post(routes::bluetooth::post_scan))
         .route(
             "/device/bluetooth/devices",
             get(routes::bluetooth::get_devices),
+        )
+        .route(
+            "/device/bluetooth/system",
+            get(routes::bluetooth::get_system_devices),
         )
         .route(
             "/device/keymap",
@@ -102,12 +104,13 @@ pub fn build_router(state: AppState) -> Router {
     // `http://127.0.0.1:7331/` and land on the app.
     #[cfg(feature = "embedded-ui")]
     let router = router
-        .route("/", get(|| async { axum::response::Redirect::temporary("/ui/") }))
+        .route(
+            "/",
+            get(|| async { axum::response::Redirect::temporary("/ui/") }),
+        )
         .route("/ui", get(ui::ui_handler))
         .route("/ui/", get(ui::ui_handler))
         .route("/ui/*path", get(ui::ui_handler));
 
-    router
-        .layer(cors)
-        .layer(TraceLayer::new_for_http())
+    router.layer(cors).layer(TraceLayer::new_for_http())
 }

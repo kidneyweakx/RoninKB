@@ -28,6 +28,9 @@ pub enum ApiError {
     #[error("invalid request: {0}")]
     BadRequest(String),
 
+    #[error("invalid config: {0}")]
+    InvalidConfig(String),
+
     #[error("internal error: {0}")]
     Internal(String),
 
@@ -42,6 +45,12 @@ pub enum ApiError {
 
     #[error("kanata io error: {0}")]
     KanataIo(#[from] std::io::Error),
+
+    #[error("kanata permission required: {0}")]
+    KanataPermissionRequired(String),
+
+    #[error("kanata device unavailable: {0}")]
+    KanataDeviceUnavailable(String),
 
     // -- Flow (cross-device clipboard sync) --------------------------------
     #[error("Flow error: {0}")]
@@ -69,6 +78,7 @@ impl IntoResponse for ApiError {
             ApiError::Db(_) => (StatusCode::INTERNAL_SERVER_ERROR, "db_error"),
             ApiError::Json(_) => (StatusCode::BAD_REQUEST, "bad_json"),
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request"),
+            ApiError::InvalidConfig(_) => (StatusCode::BAD_REQUEST, "invalid_config"),
             ApiError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
             ApiError::KanataNotInstalled => {
                 (StatusCode::SERVICE_UNAVAILABLE, "kanata_not_installed")
@@ -76,6 +86,13 @@ impl IntoResponse for ApiError {
             ApiError::KanataAlreadyRunning => (StatusCode::CONFLICT, "kanata_already_running"),
             ApiError::KanataNotRunning => (StatusCode::CONFLICT, "kanata_not_running"),
             ApiError::KanataIo(_) => (StatusCode::INTERNAL_SERVER_ERROR, "kanata_io_error"),
+            ApiError::KanataPermissionRequired(_) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "kanata_permission_required",
+            ),
+            ApiError::KanataDeviceUnavailable(_) => {
+                (StatusCode::SERVICE_UNAVAILABLE, "kanata_device_unavailable")
+            }
             ApiError::Flow(e) => match e {
                 crate::flow::FlowError::Disabled => {
                     (StatusCode::SERVICE_UNAVAILABLE, "flow_disabled")

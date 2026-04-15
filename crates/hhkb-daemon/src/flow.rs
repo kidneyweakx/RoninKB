@@ -129,11 +129,15 @@ pub enum FlowError {
 /// browse task.
 pub(crate) struct MdnsHandle {
     browse_task: Option<JoinHandle<()>>,
+    clipboard_task: Option<JoinHandle<()>>,
 }
 
 impl Drop for MdnsHandle {
     fn drop(&mut self) {
         if let Some(h) = self.browse_task.take() {
+            h.abort();
+        }
+        if let Some(h) = self.clipboard_task.take() {
             h.abort();
         }
     }
@@ -149,6 +153,19 @@ pub struct FlowManager {
     peers: Arc<RwLock<HashMap<Uuid, FlowPeer>>>,
     history: Arc<RwLock<Vec<FlowEntry>>>,
     mdns_handle: Arc<RwLock<Option<MdnsHandle>>>,
+}
+
+impl Clone for FlowManager {
+    /// Clones the manager by cloning the `Arc` references — all clones share
+    /// the same underlying data.
+    fn clone(&self) -> Self {
+        Self {
+            config: Arc::clone(&self.config),
+            peers: Arc::clone(&self.peers),
+            history: Arc::clone(&self.history),
+            mdns_handle: Arc::clone(&self.mdns_handle),
+        }
+    }
 }
 
 impl Default for FlowManager {
@@ -198,7 +215,43 @@ impl FlowManager {
                 );
                 // Store an empty handle so disable() still has something to
                 // clear and we don't retry on every call.
-                *handle_guard = Some(MdnsHandle { browse_task: None });
+                *handle_guard = Some(MdnsHandle {
+                    browse_task: None,
+                    clipboard_task: None,
+                });
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let mgr = self.clone();
+            let clipboard_task = tokio::spawn(async move {
+                let mut last = String::new();
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    // Stop if flow was disabled.
+                    if !mgr.config.read().await.enabled {
+                        break;
+                    }
+                    // Run pbpaste to get current clipboard contents.
+                    let Ok(out) = tokio::process::Command::new("pbpaste").output().await else {
+                        continue;
+                    };
+                    if !out.status.success() {
+                        continue;
+                    }
+                    let content = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if content.is_empty() || content == last {
+                        continue;
+                    }
+                    last = content.clone();
+                    let _ = mgr.sync_local(content).await;
+                }
+            });
+            // Attach the clipboard task to the existing MdnsHandle.
+            let mut hg = self.mdns_handle.write().await;
+            if let Some(h) = hg.as_mut() {
+                h.clipboard_task = Some(clipboard_task);
             }
         }
 
@@ -217,7 +270,10 @@ impl FlowManager {
         //
         // Returning Ok(empty) keeps the control-flow identical to the
         // "success" path so callers don't need to special-case it.
-        Ok(MdnsHandle { browse_task: None })
+        Ok(MdnsHandle {
+            browse_task: None,
+            clipboard_task: None,
+        })
     }
 
     /// Disable Flow and tear down any mDNS resources. Keeps configuration

@@ -74,15 +74,7 @@ impl TrayController {
         let quit = MenuItem::new("Quit RoninKB Daemon", true, None);
 
         menu.append_items(&[
-            &header,
-            &sep_a,
-            &open_ui,
-            &sep_b,
-            &autostart,
-            &sep_c,
-            &reconnect,
-            &sep_d,
-            &quit,
+            &header, &sep_a, &open_ui, &sep_b, &autostart, &sep_c, &reconnect, &sep_d, &quit,
         ])?;
 
         let open_ui_id = open_ui.id().clone();

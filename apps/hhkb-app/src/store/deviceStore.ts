@@ -208,7 +208,7 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
       layers: [],
       _roninKB: {
         version: '1.0',
-        profile: { id: '', name },
+        profile: { id: crypto.randomUUID(), name },
         hardware: {
           keyboard_mode: mode as number,
           raw_layers: { base: baseArr, fn: fnArr },

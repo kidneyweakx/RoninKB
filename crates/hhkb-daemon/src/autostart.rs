@@ -82,8 +82,7 @@ mod platform {
 
         let path = plist_path().context("cannot determine LaunchAgents path")?;
         std::fs::create_dir_all(path.parent().unwrap())?;
-        std::fs::write(&path, plist)
-            .with_context(|| format!("write plist {}", path.display()))?;
+        std::fs::write(&path, plist).with_context(|| format!("write plist {}", path.display()))?;
         tracing::info!("autostart: enabled via {}", path.display());
         Ok(())
     }
@@ -199,7 +198,13 @@ mod platform {
 mod platform {
     use anyhow::Result;
 
-    pub fn enable() -> Result<()> { Ok(()) }
-    pub fn disable() -> Result<()> { Ok(()) }
-    pub fn is_enabled() -> bool { false }
+    pub fn enable() -> Result<()> {
+        Ok(())
+    }
+    pub fn disable() -> Result<()> {
+        Ok(())
+    }
+    pub fn is_enabled() -> bool {
+        false
+    }
 }

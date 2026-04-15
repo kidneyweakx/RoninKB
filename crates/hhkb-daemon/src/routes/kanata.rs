@@ -3,15 +3,22 @@
 use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
 
+use crate::db;
 use crate::error::ApiResult;
 use crate::kanata::KanataStatus;
+use crate::kanata_config;
 use crate::state::AppState;
 use crate::ws::DaemonEvent;
 
 #[derive(Debug, Serialize)]
 pub struct StatusResponse {
     pub installed: bool,
+    pub binary_path: Option<String>,
     pub config_path: String,
+    pub input_monitoring_granted: Option<bool>,
+    pub last_error: Option<String>,
+    pub stderr_tail: Vec<String>,
+    pub device_path: Option<String>,
     #[serde(flatten)]
     pub status: KanataStatus,
 }
@@ -44,21 +51,54 @@ pub struct ConfigResponse {
 pub async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
     // Use check_alive so we reap a crashed child lazily on every poll.
     let kanata = state.kanata.clone();
-    let (status, installed, path) = tokio::task::spawn_blocking(move || {
+    let (
+        status,
+        installed,
+        config_path,
+        binary_path,
+        input_monitoring_granted,
+        last_error,
+        stderr_tail,
+        device_path,
+    ) = tokio::task::spawn_blocking(move || {
         let s = kanata.check_alive();
-        (s, kanata.is_installed(), kanata.config_path().to_path_buf())
+        (
+            s,
+            kanata.is_installed(),
+            kanata.config_path().to_path_buf(),
+            kanata.binary_path().map(|p| p.display().to_string()),
+            kanata.input_monitoring_granted(),
+            kanata.last_error(),
+            kanata.stderr_tail(20),
+            kanata.last_device_path(),
+        )
     })
     .await
-    .unwrap_or((KanataStatus::Stopped, false, Default::default()));
+    .unwrap_or((
+        KanataStatus::Stopped,
+        false,
+        Default::default(),
+        None,
+        None,
+        Some("failed to read kanata status".to_string()),
+        vec![],
+        None,
+    ));
 
     Json(StatusResponse {
         installed,
-        config_path: path.display().to_string(),
+        binary_path,
+        config_path: config_path.display().to_string(),
+        input_monitoring_granted,
+        last_error,
+        stderr_tail,
+        device_path,
         status,
     })
 }
 
 pub async fn start(State(state): State<AppState>) -> ApiResult<Json<StartResponse>> {
+    ensure_startup_config(&state).await?;
     let kanata = state.kanata.clone();
     let pid = tokio::task::spawn_blocking(move || kanata.start()).await??;
     let _ = state.events.send(DaemonEvent::KanataStarted { pid });
@@ -76,6 +116,8 @@ pub async fn reload(
     State(state): State<AppState>,
     Json(body): Json<ReloadBody>,
 ) -> ApiResult<Json<OkResponse>> {
+    kanata_config::validate_kanata_config(&body.config)
+        .map_err(crate::error::ApiError::InvalidConfig)?;
     let kanata = state.kanata.clone();
     let cfg = body.config;
     tokio::task::spawn_blocking(move || kanata.reload(&cfg)).await??;
@@ -96,4 +138,43 @@ pub async fn get_config(State(state): State<AppState>) -> ApiResult<Json<ConfigR
     })
     .await??;
     Ok(Json(ConfigResponse { config: cfg, path }))
+}
+
+async fn ensure_startup_config(state: &AppState) -> ApiResult<()> {
+    let active_profile_cfg = {
+        let conn = state.db.lock().await;
+        match db::get_active(&conn)? {
+            Some(id) => {
+                let rec = db::get_profile(&conn, &id)?;
+                match kanata_config::derive_profile_kanata_config(&rec.via) {
+                    Ok(cfg) => cfg,
+                    Err(e) => {
+                        tracing::warn!(profile = %id, %e, "invalid profile kanata config; falling back to minimal config");
+                        None
+                    }
+                }
+            }
+            None => None,
+        }
+    };
+
+    let kanata = state.kanata.clone();
+    tokio::task::spawn_blocking(move || {
+        let current = kanata.read_config()?;
+        if current.trim().is_empty() {
+            let next =
+                active_profile_cfg.unwrap_or_else(|| kanata_config::default_minimal_config(60));
+            kanata_config::validate_kanata_config(&next)
+                .map_err(crate::error::ApiError::InvalidConfig)?;
+            kanata.write_config(&next)?;
+            return Ok(()) as ApiResult<()>;
+        }
+
+        kanata_config::validate_kanata_config(&current)
+            .map_err(crate::error::ApiError::InvalidConfig)?;
+        Ok(())
+    })
+    .await??;
+
+    Ok(())
 }

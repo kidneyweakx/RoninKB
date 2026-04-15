@@ -84,6 +84,21 @@ export const useDaemonStore = create<DaemonState>((set, get) => ({
         ws.disconnect();
         ws = null;
       }
+      // Reset kanata runtime state — don't show stale pid/running status
+      void import('./kanataStore').then(({ useKanataStore }) => {
+        useKanataStore.setState({
+          installed: false,
+          processState: 'not_installed',
+          pid: null,
+          binaryPath: null,
+          configPath: null,
+          inputMonitoringGranted: null,
+          devicePath: null,
+          stderrTail: [],
+          loading: false,
+          error: null,
+        });
+      });
     }
   },
 
@@ -151,7 +166,7 @@ export const useDaemonStore = create<DaemonState>((set, get) => ({
     // Kanata events
     if (e.type === 'kanata_started') {
       void import('./kanataStore').then(({ useKanataStore }) => {
-        useKanataStore.setState({ processState: 'running', pid: e.pid });
+        useKanataStore.setState({ processState: 'running', pid: e.pid, error: null });
       });
     }
     if (e.type === 'kanata_stopped') {

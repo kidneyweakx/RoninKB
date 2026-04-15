@@ -61,14 +61,14 @@ async fn async_main() -> anyhow::Result<()> {
 /// behaviour via the `ApplicationHandler` impl below.
 #[cfg(feature = "tray")]
 fn tray_main() -> anyhow::Result<()> {
+    #[cfg(target_os = "macos")]
+    use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
     use winit::{
         application::ApplicationHandler,
         event::WindowEvent,
         event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
         window::WindowId,
     };
-    #[cfg(target_os = "macos")]
-    use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
 
     // One-shot channel used to tell axum to exit cleanly.
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
@@ -99,13 +99,7 @@ fn tray_main() -> anyhow::Result<()> {
     impl ApplicationHandler for TrayApp {
         fn resumed(&mut self, _el: &ActiveEventLoop) {}
 
-        fn window_event(
-            &mut self,
-            _el: &ActiveEventLoop,
-            _wid: WindowId,
-            _event: WindowEvent,
-        ) {
-        }
+        fn window_event(&mut self, _el: &ActiveEventLoop, _wid: WindowId, _event: WindowEvent) {}
 
         fn about_to_wait(&mut self, el: &ActiveEventLoop) {
             el.set_control_flow(ControlFlow::Poll);
@@ -142,8 +136,8 @@ fn tray_main() -> anyhow::Result<()> {
         }
     }
 
-    let tray = hhkb_daemon::tray::TrayController::new()
-        .map_err(|e| anyhow::anyhow!("tray init: {e}"))?;
+    let tray =
+        hhkb_daemon::tray::TrayController::new().map_err(|e| anyhow::anyhow!("tray init: {e}"))?;
 
     // Build event loop. On macOS, Accessory policy hides the Dock icon and
     // Cmd+Tab entry — this process should live only in the menu bar.

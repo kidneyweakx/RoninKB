@@ -10,8 +10,9 @@ use hhkb_core::ViaProfile;
 
 use crate::db;
 use crate::db::ProfileRecord;
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
 use crate::kanata::KanataStatus;
+use crate::kanata_config;
 use crate::state::AppState;
 use crate::ws::DaemonEvent;
 
@@ -52,6 +53,7 @@ pub async fn create(
     State(state): State<AppState>,
     Json(body): Json<ViaProfile>,
 ) -> ApiResult<Json<ProfileRecord>> {
+    validate_profile_kanata_config(&body)?;
     let conn = state.db.lock().await;
     let rec = db::create_profile(&conn, body)?;
     Ok(Json(rec))
@@ -62,6 +64,7 @@ pub async fn update(
     Path(id): Path<String>,
     Json(body): Json<ViaProfile>,
 ) -> ApiResult<Json<ProfileRecord>> {
+    validate_profile_kanata_config(&body)?;
     let conn = state.db.lock().await;
     let rec = db::update_profile(&conn, &id, body)?;
     drop(conn);
@@ -96,12 +99,7 @@ pub async fn set_active(
         let conn = state.db.lock().await;
         db::set_active(&conn, &body.id)?;
         let rec = db::get_profile(&conn, &body.id)?;
-        rec.via
-            .ronin
-            .as_ref()
-            .and_then(|r| r.software.as_ref())
-            .filter(|sw| sw.engine.eq_ignore_ascii_case("kanata"))
-            .map(|sw| sw.config.clone())
+        kanata_config::derive_profile_kanata_config(&rec.via).map_err(ApiError::InvalidConfig)?
     };
 
     let _ = state.events.send(DaemonEvent::ProfileChanged {
@@ -137,4 +135,13 @@ pub async fn set_active(
     }
 
     Ok(Json(ActiveResponse { id: Some(body.id) }))
+}
+
+fn validate_profile_kanata_config(via: &ViaProfile) -> ApiResult<()> {
+    if let Some(cfg) =
+        kanata_config::derive_profile_kanata_config(via).map_err(ApiError::InvalidConfig)?
+    {
+        kanata_config::validate_kanata_config(&cfg).map_err(ApiError::InvalidConfig)?;
+    }
+    Ok(())
 }
