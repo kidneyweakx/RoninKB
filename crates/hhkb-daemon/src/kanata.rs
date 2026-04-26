@@ -47,18 +47,18 @@ fn extract_bundled_kanata() -> Option<PathBuf> {
     use std::io::Write as _;
 
     #[cfg(target_os = "macos")]
-    let (path, info_plist_path) = {
+    let (path, info_plist_path): (PathBuf, PathBuf) = {
         let app_root = macos_kanata_app_root()?;
         let macos_dir = app_root.join("Contents").join("MacOS");
         std::fs::create_dir_all(&macos_dir).ok()?;
         (
             macos_dir.join("kanata"),
-            Some(app_root.join("Contents").join("Info.plist")),
+            app_root.join("Contents").join("Info.plist"),
         )
     };
 
     #[cfg(not(target_os = "macos"))]
-    let (path, info_plist_path): (PathBuf, Option<PathBuf>) = {
+    let path: PathBuf = {
         let dirs = ProjectDirs::from("", "", "roninKB")?;
         let bin_dir = dirs.data_dir().join("bin");
         std::fs::create_dir_all(&bin_dir).ok()?;
@@ -66,7 +66,7 @@ fn extract_bundled_kanata() -> Option<PathBuf> {
         let bin = bin_dir.join("kanata.exe");
         #[cfg(not(windows))]
         let bin = bin_dir.join("kanata");
-        (bin, None)
+        bin
     };
 
     let expected = BUNDLED_KANATA.len() as u64;
@@ -90,15 +90,14 @@ fn extract_bundled_kanata() -> Option<PathBuf> {
         tracing::info!(path = %path.display(), bytes = expected, "extracted bundled kanata binary");
     }
 
-    if let Some(plist) = info_plist_path.as_ref() {
-        if !plist.exists() {
-            let _ = std::fs::write(plist, KANATA_APP_INFO_PLIST);
-            tracing::info!(path = %plist.display(), "wrote kanata Info.plist");
-        }
-    }
-
     #[cfg(target_os = "macos")]
-    cleanup_legacy_kanata_extraction();
+    {
+        if !info_plist_path.exists() {
+            let _ = std::fs::write(&info_plist_path, KANATA_APP_INFO_PLIST);
+            tracing::info!(path = %info_plist_path.display(), "wrote kanata Info.plist");
+        }
+        cleanup_legacy_kanata_extraction();
+    }
 
     Some(path)
 }
