@@ -25,6 +25,140 @@ use serde::Serialize;
 
 use crate::error::ApiError;
 
+// ---------------------------------------------------------------------------
+// Bundled binary (feature = "bundled-kanata")
+// ---------------------------------------------------------------------------
+
+/// Raw bytes of the kanata binary downloaded at build time.
+/// Only present when compiled with `--features bundled-kanata`.
+#[cfg(feature = "bundled-kanata")]
+static BUNDLED_KANATA: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/kanata-bundle"));
+
+/// Extract the bundled kanata binary to a discoverable location and return
+/// its path. Re-extracts only when the on-disk size differs (i.e. the
+/// daemon was rebuilt with a newer bundled version).
+///
+/// On macOS we wrap kanata in a thin `.app` bundle inside `~/Applications/`
+/// so it shows up alongside other apps in the System Settings → Input
+/// Monitoring picker. On other platforms it lands under the platform's
+/// user-data directory (`~/.local/share/roninKB/bin/kanata` etc.).
+#[cfg(feature = "bundled-kanata")]
+fn extract_bundled_kanata() -> Option<PathBuf> {
+    use std::io::Write as _;
+
+    #[cfg(target_os = "macos")]
+    let (path, info_plist_path) = {
+        let app_root = macos_kanata_app_root()?;
+        let macos_dir = app_root.join("Contents").join("MacOS");
+        std::fs::create_dir_all(&macos_dir).ok()?;
+        (
+            macos_dir.join("kanata"),
+            Some(app_root.join("Contents").join("Info.plist")),
+        )
+    };
+
+    #[cfg(not(target_os = "macos"))]
+    let (path, info_plist_path): (PathBuf, Option<PathBuf>) = {
+        let dirs = ProjectDirs::from("", "", "roninKB")?;
+        let bin_dir = dirs.data_dir().join("bin");
+        std::fs::create_dir_all(&bin_dir).ok()?;
+        #[cfg(windows)]
+        let bin = bin_dir.join("kanata.exe");
+        #[cfg(not(windows))]
+        let bin = bin_dir.join("kanata");
+        (bin, None)
+    };
+
+    let expected = BUNDLED_KANATA.len() as u64;
+    let needs_write = std::fs::metadata(&path)
+        .map(|m| m.len() != expected)
+        .unwrap_or(true);
+
+    if needs_write {
+        let mut f = std::fs::File::create(&path).ok()?;
+        f.write_all(BUNDLED_KANATA).ok()?;
+        drop(f);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&path).ok()?.permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&path, perms).ok()?;
+        }
+
+        tracing::info!(path = %path.display(), bytes = expected, "extracted bundled kanata binary");
+    }
+
+    if let Some(plist) = info_plist_path.as_ref() {
+        if !plist.exists() {
+            let _ = std::fs::write(plist, KANATA_APP_INFO_PLIST);
+            tracing::info!(path = %plist.display(), "wrote kanata Info.plist");
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    cleanup_legacy_kanata_extraction();
+
+    Some(path)
+}
+
+/// Path to `~/Applications/RoninKB Kanata.app`. We prefer the per-user
+/// Applications folder (no admin needed and macOS auto-creates it on demand
+/// in Finder's sidebar) so the bundle is visible to the System Settings
+/// picker without diving into Library.
+#[cfg(all(target_os = "macos", feature = "bundled-kanata"))]
+fn macos_kanata_app_root() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    let apps_dir = PathBuf::from(home).join("Applications");
+    std::fs::create_dir_all(&apps_dir).ok()?;
+    Some(apps_dir.join("RoninKB Kanata.app"))
+}
+
+/// Remove the legacy extraction at `~/Library/Application Support/roninKB/bin`
+/// once we're sure the new `.app` location is populated. Best-effort —
+/// silently ignores failures (file missing, permission denied, etc.).
+#[cfg(all(target_os = "macos", feature = "bundled-kanata"))]
+fn cleanup_legacy_kanata_extraction() {
+    if let Some(dirs) = ProjectDirs::from("", "", "roninKB") {
+        let legacy = dirs.data_dir().join("bin").join("kanata");
+        if legacy.exists() {
+            let _ = std::fs::remove_file(&legacy);
+            tracing::info!(path = %legacy.display(), "removed legacy kanata extraction");
+        }
+    }
+}
+
+#[cfg(all(target_os = "macos", feature = "bundled-kanata"))]
+const KANATA_APP_INFO_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key>
+  <string>kanata</string>
+  <key>CFBundleIdentifier</key>
+  <string>gg.solidarity.roninkb.kanata</string>
+  <key>CFBundleName</key>
+  <string>RoninKB Kanata</string>
+  <key>CFBundleDisplayName</key>
+  <string>RoninKB Kanata</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>1.11.0</string>
+  <key>CFBundleVersion</key>
+  <string>1.11.0</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>11.0</string>
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+</dict>
+</plist>
+"#;
+
 /// Observable state of the kanata child process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -441,9 +575,11 @@ impl Drop for KanataManager {
 // ---------------------------------------------------------------------------
 
 fn detect_kanata_binary() -> Option<PathBuf> {
+    // 1. System PATH (e.g. /usr/local/bin/kanata)
     if let Ok(p) = which::which("kanata") {
         return Some(p);
     }
+    // 2. Cargo install fallback (~/.cargo/bin/kanata)
     if let Some(home) = std::env::var_os("HOME") {
         let cargo_bin = PathBuf::from(home)
             .join(".cargo")
@@ -452,6 +588,11 @@ fn detect_kanata_binary() -> Option<PathBuf> {
         if cargo_bin.is_file() {
             return Some(cargo_bin);
         }
+    }
+    // 3. Bundled binary extracted from the daemon itself.
+    #[cfg(feature = "bundled-kanata")]
+    if let Some(p) = extract_bundled_kanata() {
+        return Some(p);
     }
     None
 }

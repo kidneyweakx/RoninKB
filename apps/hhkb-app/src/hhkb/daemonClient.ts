@@ -420,6 +420,18 @@ export class DaemonClient {
       body: JSON.stringify({ config }),
     });
   }
+
+  /**
+   * Open Finder/Explorer with the kanata binary (or the wrapping `.app`
+   * bundle on macOS) selected, so the user can drag it into the Input
+   * Monitoring picker without retyping a path.
+   */
+  async kanataReveal(): Promise<{ path: string; bundle: string | null }> {
+    return requestJson<{ path: string; bundle: string | null }>(
+      `${this.baseUrl}/kanata/reveal`,
+      { method: 'POST' },
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

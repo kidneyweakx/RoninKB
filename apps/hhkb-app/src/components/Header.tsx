@@ -15,7 +15,6 @@ import {
   useColorModeValue,
 } from '@chakra-ui/react';
 import {
-  Command,
   ChevronDown,
   Wifi,
   WifiOff,
@@ -36,6 +35,7 @@ import { useKanataStore } from '../store/kanataStore';
 import { ConnectButton } from './ConnectButton';
 import { ProfileImportExport } from './ProfileImportExport';
 import { NewProfileDialog, type NewProfileMode } from './NewProfileDialog';
+import { RoninLogo } from './RoninLogo';
 import { FACTORY_PROFILE_IDS } from '../data/factoryDefault';
 
 export function Header() {
@@ -107,9 +107,9 @@ export function Header() {
         : battery >= 20
           ? 'warning'
           : 'error';
-  const logoBg = useColorModeValue('bg.subtle', 'accent.primary');
-  const logoColor = useColorModeValue('text.secondary', 'accent.fg');
-  const logoBorderColor = useColorModeValue('border.subtle', 'transparent');
+  const logoConnected = deviceStatus === 'connected' || btConnected;
+  const logoColor = useColorModeValue('text.primary', 'accent.primary');
+  const logoBorderColor = logoConnected ? 'transparent' : 'border.subtle';
 
   const DaemonIcon = daemonMeta.Icon;
 
@@ -142,19 +142,32 @@ export function Header() {
         >
           {/* Left — brand */}
           <HStack spacing={3} flex="0 0 auto">
-            <Flex
-              align="center"
-              justify="center"
-              w="28px"
-              h="28px"
-              borderRadius="md"
-              bg={logoBg}
-              color={logoColor}
-              border="1px solid"
-              borderColor={logoBorderColor}
+            <Tooltip
+              label={
+                logoConnected
+                  ? deviceStatus === 'connected'
+                    ? 'Keyboard linked'
+                    : 'Bluetooth paired'
+                  : 'No keyboard'
+              }
+              placement="bottom-start"
+              hasArrow={false}
+              openDelay={400}
             >
-              <Command size={16} strokeWidth={2.25} />
-            </Flex>
+              <Flex
+                align="center"
+                justify="center"
+                w="28px"
+                h="28px"
+                borderRadius="sm"
+                color={logoColor}
+                border="1px solid"
+                borderColor={logoBorderColor}
+                transition="border-color 180ms ease, color 180ms ease"
+              >
+                <RoninLogo connected={logoConnected} size={18} strokeWidth={1.75} />
+              </Flex>
+            </Tooltip>
             <Box>
               <Text
                 fontSize="sm"

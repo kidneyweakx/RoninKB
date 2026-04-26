@@ -90,6 +90,12 @@ interface ProfileState {
   createNew: (name: string, template?: ViaProfile) => Promise<Profile>;
   removeProfile: (id: string) => Promise<void>;
   setActiveProfile: (id: string) => Promise<void>;
+  /**
+   * Rename a profile's id locally — used when promoting a local-only
+   * profile (e.g. factory default) to the daemon and the daemon assigns
+   * a different canonical id.
+   */
+  rekeyProfile: (oldId: string, newId: string) => void;
   getActive: () => Profile | undefined;
 
   loadFromDaemon: () => Promise<void>;
@@ -210,6 +216,38 @@ export const useProfileStore = create<ProfileState>((set, get) => ({
         profiles: s.profiles.filter((p) => p.id !== id),
         activeProfileId:
           s.activeProfileId === id ? null : s.activeProfileId,
+      };
+      saveToLocalStorage({
+        profiles: next.profiles,
+        activeProfileId: next.activeProfileId,
+      });
+      return next;
+    });
+  },
+
+  rekeyProfile(oldId, newId) {
+    if (oldId === newId) return;
+    set((s) => {
+      const next = {
+        profiles: s.profiles.map((p) =>
+          p.id === oldId
+            ? {
+                ...p,
+                id: newId,
+                via: {
+                  ...p.via,
+                  _roninKB: p.via._roninKB
+                    ? {
+                        ...p.via._roninKB,
+                        profile: { ...p.via._roninKB.profile, id: newId },
+                      }
+                    : undefined,
+                },
+              }
+            : p,
+        ),
+        activeProfileId:
+          s.activeProfileId === oldId ? newId : s.activeProfileId,
       };
       saveToLocalStorage({
         profiles: next.profiles,

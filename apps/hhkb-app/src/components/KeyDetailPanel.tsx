@@ -14,6 +14,7 @@ import {
   Button,
   Flex,
   Tag,
+  Tooltip,
   Checkbox,
 } from '@chakra-ui/react';
 import { useRef, useState } from 'react';
@@ -37,9 +38,19 @@ import { describeToken } from '../hhkb/keyBindings';
 interface Props {
   selectedIndex: number | null;
   layer: 'base' | 'fn';
+  /**
+   * When false, hardware-layer edits (Remap hardware key, Reset, KeycodePicker)
+   * are surfaced as disabled. The BT-only path can still inspect and tweak
+   * software / kanata bindings — those remain enabled.
+   */
+  isUsbConnected?: boolean;
 }
 
-export function KeyDetailPanel({ selectedIndex, layer }: Props) {
+export function KeyDetailPanel({
+  selectedIndex,
+  layer,
+  isUsbConnected = true,
+}: Props) {
   const baseKeymap = useDeviceStore((s) => s.baseKeymap);
   const fnKeymap = useDeviceStore((s) => s.fnKeymap);
   const setKeyOverride = useDeviceStore((s) => s.setKeyOverride);
@@ -225,6 +236,8 @@ export function KeyDetailPanel({ selectedIndex, layer }: Props) {
               label="Hardware (EEPROM)"
               value={isDefault ? 'default' : hexCode}
               active={origin === 'hw'}
+              disabled={!isUsbConnected}
+              disabledHint="USB required"
               onClick={() => setPicking((v) => !v)}
             />
             <BindingRow
@@ -268,28 +281,37 @@ export function KeyDetailPanel({ selectedIndex, layer }: Props) {
         {/* Hardware-edit action — shows the KeycodePicker inline */}
         <Box px={5} py={4}>
           <HStack spacing={2}>
-            <Button
-              leftIcon={picking ? <X size={14} /> : <Pencil size={14} />}
-              variant={picking ? 'outline' : 'solid'}
-              size="sm"
-              onClick={() => setPicking((v) => !v)}
-              isDisabled={!keymap}
-              flex="1"
+            <Tooltip
+              label="USB-C required to write EEPROM"
+              isDisabled={isUsbConnected}
+              placement="top"
+              hasArrow={false}
+              openDelay={300}
             >
-              {picking ? 'Cancel' : 'Remap hardware key'}
-            </Button>
+              <Button
+                leftIcon={picking ? <X size={14} /> : <Pencil size={14} />}
+                variant={picking ? 'outline' : 'solid'}
+                size="sm"
+                onClick={() => setPicking((v) => !v)}
+                isDisabled={!keymap || !isUsbConnected}
+                flex="1"
+              >
+                {picking ? 'Cancel' : 'Remap hardware key'}
+              </Button>
+            </Tooltip>
             {!isDefault && !picking && origin === 'hw' && (
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => applyHwEdit(0)}
+                isDisabled={!isUsbConnected}
               >
                 Reset
               </Button>
             )}
           </HStack>
 
-          {picking && (
+          {picking && isUsbConnected && (
             <Box mt={3}>
               <KeycodePicker onPick={(code) => applyHwEdit(code)} />
             </Box>
@@ -410,6 +432,7 @@ function BindingRow({
   value,
   active = false,
   disabled = false,
+  disabledHint,
   onClick,
 }: {
   icon: React.ReactNode;
@@ -417,6 +440,7 @@ function BindingRow({
   value: string;
   active?: boolean;
   disabled?: boolean;
+  disabledHint?: string;
   onClick?: () => void;
 }) {
   const clickable = !!onClick && !disabled;
@@ -472,12 +496,18 @@ function BindingRow({
         </HStack>
         <Text
           fontSize="xs"
-          color={active ? 'accent.primary' : 'text.muted'}
+          color={
+            disabled
+              ? 'text.muted'
+              : active
+                ? 'accent.primary'
+                : 'text.muted'
+          }
           fontFamily="mono"
           noOfLines={1}
           maxW="160px"
         >
-          {value}
+          {disabled && disabledHint ? disabledHint : value}
         </Text>
       </HStack>
     </Box>

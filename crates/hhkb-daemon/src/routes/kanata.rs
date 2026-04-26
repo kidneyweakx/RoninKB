@@ -4,7 +4,7 @@ use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
 
 use crate::db;
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
 use crate::kanata::KanataStatus;
 use crate::kanata_config;
 use crate::state::AppState;
@@ -42,6 +42,12 @@ pub struct ReloadBody {
 pub struct ConfigResponse {
     pub config: String,
     pub path: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RevealResponse {
+    pub path: String,
+    pub bundle: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -128,6 +134,65 @@ pub async fn reload(
         profile_id: String::new(),
     });
     Ok(Json(OkResponse { status: "reloaded" }))
+}
+
+/// `POST /kanata/reveal` — open a Finder/Explorer window with the kanata
+/// binary (or its enclosing `.app` bundle on macOS) selected, so the user
+/// can drag it into the Input Monitoring picker.
+pub async fn reveal(State(state): State<AppState>) -> ApiResult<Json<RevealResponse>> {
+    let path = state
+        .kanata
+        .binary_path()
+        .ok_or(ApiError::KanataNotInstalled)?;
+
+    // On macOS the binary lives at `<bundle>.app/Contents/MacOS/kanata`. We
+    // reveal the enclosing `.app` so Finder shows it as a single icon.
+    let reveal_target = bundle_root_for(&path).unwrap_or_else(|| path.clone());
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open")
+            .arg("-R")
+            .arg(&reveal_target)
+            .spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let parent = path.parent().unwrap_or(std::path::Path::new("."));
+        let _ = std::process::Command::new("xdg-open")
+            .arg(parent)
+            .spawn();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("explorer.exe")
+            .arg("/select,")
+            .arg(&reveal_target)
+            .spawn();
+    }
+
+    Ok(Json(RevealResponse {
+        path: path.display().to_string(),
+        bundle: bundle_root_for(&path).map(|p| p.display().to_string()),
+    }))
+}
+
+/// Walk up from a binary inside `<X>.app/Contents/MacOS/<bin>` and return
+/// the `.app` root. Returns `None` if the path doesn't match that layout.
+fn bundle_root_for(binary: &std::path::Path) -> Option<std::path::PathBuf> {
+    let macos_dir = binary.parent()?;
+    if macos_dir.file_name()?.to_str()? != "MacOS" {
+        return None;
+    }
+    let contents = macos_dir.parent()?;
+    if contents.file_name()?.to_str()? != "Contents" {
+        return None;
+    }
+    let app_root = contents.parent()?;
+    if app_root.extension()?.to_str()? != "app" {
+        return None;
+    }
+    Some(app_root.to_path_buf())
 }
 
 pub async fn get_config(State(state): State<AppState>) -> ApiResult<Json<ConfigResponse>> {

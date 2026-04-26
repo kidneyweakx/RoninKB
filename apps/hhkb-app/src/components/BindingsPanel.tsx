@@ -29,7 +29,7 @@ import {
   useToast,
   VStack,
 } from '@chakra-ui/react';
-import { Check, Pencil, Plus, Trash2, X } from 'lucide-react';
+import { Check, ExternalLink, Pencil, Plus, ShieldAlert, Trash2, X } from 'lucide-react';
 import { HHKB_LAYOUT } from '../data/hhkbLayout';
 import { useDaemonStore } from '../store/daemonStore';
 import { useKanataStore } from '../store/kanataStore';
@@ -45,6 +45,28 @@ import {
   type TapHoldBinding,
 } from '../hhkb/keyBindings';
 import type { RoninExtension, ViaProfile } from '../hhkb/via';
+import { DaemonError, type DaemonClient } from '../hhkb/daemonClient';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Stamp a canonical profile id into the via's `_roninKB.profile.id` so the
+ * daemon can round-trip it back to us. The daemon's create endpoint requires
+ * the inner id to parse as a UUID — when our local id (e.g. 'default') isn't
+ * UUID-shaped we fall back to a fresh one and let the caller sync the local
+ * store afterwards.
+ */
+function stampProfileId(via: ViaProfile, id: string, name: string): ViaProfile {
+  const cloned: ViaProfile = JSON.parse(JSON.stringify(via)) as ViaProfile;
+  const ext: RoninExtension = cloned._roninKB ?? {
+    version: '1',
+    profile: { id, name },
+  };
+  const safeId = UUID_RE.test(id) ? id : crypto.randomUUID();
+  ext.profile = { ...ext.profile, id: safeId, name: ext.profile?.name ?? name };
+  cloned._roninKB = ext;
+  return cloned;
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -111,6 +133,10 @@ export function BindingsPanel({ focusKeyIndex, onSaved, onCancel }: Props) {
   const daemonClient = useDaemonStore((s) => s.client);
   const kanataProcessState = useKanataStore((s) => s.processState);
   const kanataStart = useKanataStore((s) => s.start);
+  const kanataInputMonitoring = useKanataStore((s) => s.inputMonitoringGranted);
+  const kanataBinaryPath = useKanataStore((s) => s.binaryPath);
+  const kanataLastError = useKanataStore((s) => s.error);
+  const kanataInstalled = useKanataStore((s) => s.installed);
 
   const initialConfig = useMemo(
     () => activeProfile?.via._roninKB?.software?.config ?? '',
@@ -128,10 +154,18 @@ export function BindingsPanel({ focusKeyIndex, onSaved, onCancel }: Props) {
    * `null`    → no row being edited
    * `NEW_ROW` → the "add new binding" row
    * `n`       → the row with `sourceIndex === n`
+   *
+   * When `focusKeyIndex` points at a key with no existing binding, we open
+   * the new-row UI (NEW_ROW) so the EditRow actually mounts — otherwise
+   * the existing-row branch would have nothing to map over, leaving the
+   * panel stuck in its empty state with `Add Binding` disabled.
    */
   const [editingKey, setEditingKey] = useState<number | null>(() => {
     if (focusKeyIndex == null) return null;
-    return focusKeyIndex;
+    const existing = parseKeyBindings(initialConfig).find(
+      (b) => b.sourceIndex === focusKeyIndex,
+    );
+    return existing ? focusKeyIndex : NEW_ROW;
   });
 
   const [draft, setDraft] = useState<KeyBinding | null>(() => {
@@ -154,7 +188,11 @@ export function BindingsPanel({ focusKeyIndex, onSaved, onCancel }: Props) {
   }
 
   function openAdd() {
-    const usedSet = new Set(bindings.map((b) => b.sourceIndex));
+    // Stage the in-flight draft (if any) before opening a fresh row so
+    // the user doesn't have to manually click an "Apply" button first.
+    if (editingKey !== null && draft) confirmDraft();
+    const stagedBindings = bindingsWithDraft();
+    const usedSet = new Set(stagedBindings.map((b) => b.sourceIndex));
     const firstFree =
       [...HHKB_LAYOUT]
         .sort((a, b) => a.index - b.index)
@@ -185,6 +223,24 @@ export function BindingsPanel({ focusKeyIndex, onSaved, onCancel }: Props) {
     setDraft(null);
   }
 
+  /**
+   * Returns the list of bindings as if the in-flight draft (when present)
+   * were committed. Used to derive a "what the user will save" snapshot
+   * without going through React state churn first.
+   */
+  function bindingsWithDraft(): KeyBinding[] {
+    if (editingKey === null || !draft) return bindings;
+    if (editingKey === NEW_ROW) {
+      return [
+        ...bindings.filter((b) => b.sourceIndex !== draft.sourceIndex),
+        draft,
+      ];
+    }
+    return bindings.map((b) =>
+      b.sourceIndex === draft.sourceIndex ? draft : b,
+    );
+  }
+
   function deleteBinding(idx: number) {
     setBindings((prev) => prev.filter((b) => b.sourceIndex !== idx));
     if (editingKey === idx) cancelDraft();
@@ -196,11 +252,40 @@ export function BindingsPanel({ focusKeyIndex, onSaved, onCancel }: Props) {
     if (!activeProfile) return;
     setSaving(true);
     try {
-      const config = generateKanataConfig(bindings);
+      // Auto-commit any open draft so users don't have to click an
+      // intermediate "Apply" before saving.
+      const finalBindings = bindingsWithDraft();
+      if (editingKey !== null && draft) {
+        setBindings(finalBindings);
+        setEditingKey(null);
+        setDraft(null);
+      }
+      const config = generateKanataConfig(finalBindings);
       const nextVia = applyConfigToProfile(activeProfile.via, config);
 
       if (daemonStatus === 'online' && daemonClient) {
-        await daemonClient.updateProfile(activeProfile.id, nextVia);
+        try {
+          await daemonClient.updateProfile(activeProfile.id, nextVia);
+        } catch (err) {
+          // The active profile lives only in local state (factory default,
+          // freshly imported, or the legacy 'default' seed). Promote it to
+          // the daemon by issuing a create on first save instead.
+          if (err instanceof DaemonError && err.status === 404) {
+            const stamped = stampProfileId(
+              nextVia,
+              activeProfile.id,
+              activeProfile.name,
+            );
+            const summary = await daemonClient.createProfile(stamped);
+            if (summary.id !== activeProfile.id) {
+              useProfileStore
+                .getState()
+                .rekeyProfile(activeProfile.id, summary.id);
+            }
+          } else {
+            throw err;
+          }
+        }
 
         // Ensure kanata is running before attempting reload.
         // If it's stopped (but installed), auto-start it so the bindings
@@ -208,13 +293,21 @@ export function BindingsPanel({ focusKeyIndex, onSaved, onCancel }: Props) {
         if (kanataProcessState === 'stopped') {
           try {
             await kanataStart();
-          } catch {
-            // kanataStart throws on failure; show a warning but don't abort save
+          } catch (e) {
+            const raw = e instanceof Error ? e.message : String(e);
+            const isPermIssue =
+              kanataInputMonitoring === false ||
+              raw.includes('Input Monitoring') ||
+              raw.includes('kanata_permission_required');
             toast({
-              title: 'Kanata not started',
-              description: 'Bindings saved, but kanata failed to start. Start it manually in Settings.',
+              title: isPermIssue
+                ? 'Grant Input Monitoring to apply bindings'
+                : 'Kanata failed to start',
+              description: isPermIssue
+                ? 'Bindings saved. macOS needs permission for kanata to capture keys — see the banner above to open System Settings.'
+                : `Bindings saved but kanata didn't start: ${raw}`,
               status: 'warning',
-              duration: 5000,
+              duration: 6000,
               isClosable: true,
             });
             await useProfileStore.getState().loadFromDaemon();
@@ -280,6 +373,10 @@ export function BindingsPanel({ focusKeyIndex, onSaved, onCancel }: Props) {
 
   const usedKeys = new Set(bindings.map((b) => b.sourceIndex));
   const noBindings = bindings.length === 0 && editingKey !== NEW_ROW;
+  const needsInputMonitoring =
+    kanataInstalled &&
+    kanataInputMonitoring === false &&
+    kanataProcessState !== 'running';
 
   return (
     <VStack align="stretch" spacing={0}>
@@ -290,40 +387,52 @@ export function BindingsPanel({ focusKeyIndex, onSaved, onCancel }: Props) {
         </Alert>
       )}
 
-      {/* Column header */}
-      <Flex px={3} py={1.5} mb={1}>
-        <Text
-          flex="1.2"
-          fontSize="9px"
-          fontFamily="mono"
-          textTransform="uppercase"
-          letterSpacing="0.08em"
-          color="text.muted"
-        >
-          Physical Key
-        </Text>
-        <Text
-          flex="2"
-          fontSize="9px"
-          fontFamily="mono"
-          textTransform="uppercase"
-          letterSpacing="0.08em"
-          color="text.muted"
-        >
-          Binding
-        </Text>
-        <Text
-          flex="0.8"
-          fontSize="9px"
-          fontFamily="mono"
-          textTransform="uppercase"
-          letterSpacing="0.08em"
-          color="text.muted"
-        >
-          Type
-        </Text>
-        <Box w="52px" />
-      </Flex>
+      {needsInputMonitoring && (
+        <KanataPermissionBanner
+          binaryPath={kanataBinaryPath}
+          detail={kanataLastError}
+          daemonClient={daemonClient}
+        />
+      )}
+
+      {/* Column header — only shown when there's a list of committed
+          bindings. In focus mode (a single EditRow with its own labels)
+          the columnar header doesn't align with anything. */}
+      {bindings.length > 0 && editingKey !== NEW_ROW && (
+        <Flex px={3} py={1.5} mb={1}>
+          <Text
+            flex="1.2"
+            fontSize="9px"
+            fontFamily="mono"
+            textTransform="uppercase"
+            letterSpacing="0.08em"
+            color="text.muted"
+          >
+            Physical Key
+          </Text>
+          <Text
+            flex="2"
+            fontSize="9px"
+            fontFamily="mono"
+            textTransform="uppercase"
+            letterSpacing="0.08em"
+            color="text.muted"
+          >
+            Binding
+          </Text>
+          <Text
+            flex="0.8"
+            fontSize="9px"
+            fontFamily="mono"
+            textTransform="uppercase"
+            letterSpacing="0.08em"
+            color="text.muted"
+          >
+            Type
+          </Text>
+          <Box w="52px" />
+        </Flex>
+      )}
 
       {/* Empty state */}
       {noBindings && (
@@ -344,11 +453,18 @@ export function BindingsPanel({ focusKeyIndex, onSaved, onCancel }: Props) {
         </Box>
       )}
 
-      {/* Binding rows */}
+      {/* Binding rows.
+       *
+       * "Focus mode" = the editor has nothing else to show but a single
+       * EditRow (no other committed bindings, no other open drafts). In that
+       * case we hide the in-row Apply/Cancel actions so the footer's
+       * Save & Apply is the unambiguous primary action — one click does the
+       * whole thing. */}
       {!noBindings && (
         <VStack align="stretch" spacing={1} mb={2}>
           {bindings.map((b) => {
             const isEditing = editingKey === b.sourceIndex;
+            const focusOnly = isEditing && bindings.length === 1;
             return isEditing && draft ? (
               <EditRow
                 key={b.sourceIndex}
@@ -357,6 +473,7 @@ export function BindingsPanel({ focusKeyIndex, onSaved, onCancel }: Props) {
                 onConfirm={confirmDraft}
                 onCancel={cancelDraft}
                 usedIndices={usedKeys}
+                showActions={!focusOnly}
               />
             ) : (
               <BindingRow
@@ -378,6 +495,7 @@ export function BindingsPanel({ focusKeyIndex, onSaved, onCancel }: Props) {
               onCancel={cancelDraft}
               usedIndices={usedKeys}
               isNew
+              showActions={bindings.length > 0}
             />
           )}
         </VStack>
@@ -396,7 +514,6 @@ export function BindingsPanel({ focusKeyIndex, onSaved, onCancel }: Props) {
           variant="ghost"
           leftIcon={<Plus size={11} />}
           onClick={openAdd}
-          isDisabled={editingKey !== null}
         >
           Add Binding
         </Button>
@@ -409,7 +526,7 @@ export function BindingsPanel({ focusKeyIndex, onSaved, onCancel }: Props) {
           <Button
             size="xs"
             onClick={() => void handleSave()}
-            isDisabled={!activeProfile || saving || editingKey !== null}
+            isDisabled={!activeProfile || saving}
             isLoading={saving}
           >
             Save & Apply
@@ -510,6 +627,7 @@ function EditRow({
   onCancel,
   usedIndices,
   isNew = false,
+  showActions = true,
 }: {
   draft: KeyBinding;
   onChange: (b: KeyBinding) => void;
@@ -517,6 +635,11 @@ function EditRow({
   onCancel: () => void;
   usedIndices: Set<number>;
   isNew?: boolean;
+  /**
+   * Hide the in-row Apply/Cancel actions. Used when the surrounding form
+   * already has a primary "Save & Apply" button that auto-commits.
+   */
+  showActions?: boolean;
 }) {
   const sortedKeys = useMemo(
     () => [...HHKB_LAYOUT].sort((a, b) => a.index - b.index),
@@ -635,74 +758,82 @@ function EditRow({
         )}
 
         {draft.type === 'tap-hold' && (
-          <Flex gap={2} align="flex-end">
-            <Box flex="1">
-              <Text
-                fontSize="9px"
-                fontFamily="mono"
-                color="text.muted"
-                textTransform="uppercase"
-                letterSpacing="0.06em"
-                mb={1}
-              >
-                Tap
-              </Text>
-              <TokenSelect
-                value={(draft as TapHoldBinding).tap}
-                onChange={(t) => onChange({ ...(draft as TapHoldBinding), tap: t })}
-              />
-            </Box>
-            <Box flex="1">
-              <Text
-                fontSize="9px"
-                fontFamily="mono"
-                color="text.muted"
-                textTransform="uppercase"
-                letterSpacing="0.06em"
-                mb={1}
-              >
-                Hold
-              </Text>
-              <TokenSelect
-                value={(draft as TapHoldBinding).hold}
-                onChange={(t) => onChange({ ...(draft as TapHoldBinding), hold: t })}
-              />
-            </Box>
-            <Box>
-              <Text
-                fontSize="9px"
-                fontFamily="mono"
-                color="text.muted"
-                textTransform="uppercase"
-                letterSpacing="0.06em"
-                mb={1}
-              >
-                Timeout
-              </Text>
-              <HStack spacing={1}>
-                <Input
-                  size="xs"
-                  type="number"
-                  min={50}
-                  max={2000}
-                  w="64px"
-                  value={(draft as TapHoldBinding).timeout}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    if (!isNaN(v))
-                      onChange({
-                        ...(draft as TapHoldBinding),
-                        timeout: Math.max(50, Math.min(2000, v)),
-                      });
-                  }}
+          <>
+            <Flex gap={2} align="flex-end">
+              <Box flex="1">
+                <Text
+                  fontSize="9px"
                   fontFamily="mono"
-                />
-                <Text fontSize="10px" color="text.muted">
-                  ms
+                  color="text.muted"
+                  textTransform="uppercase"
+                  letterSpacing="0.06em"
+                  mb={1}
+                >
+                  Tap
                 </Text>
-              </HStack>
-            </Box>
-          </Flex>
+                <TokenSelect
+                  value={(draft as TapHoldBinding).tap}
+                  onChange={(t) => onChange({ ...(draft as TapHoldBinding), tap: t })}
+                />
+              </Box>
+              <Box flex="1">
+                <Text
+                  fontSize="9px"
+                  fontFamily="mono"
+                  color="text.muted"
+                  textTransform="uppercase"
+                  letterSpacing="0.06em"
+                  mb={1}
+                >
+                  Hold
+                </Text>
+                <TokenSelect
+                  value={(draft as TapHoldBinding).hold}
+                  onChange={(t) => onChange({ ...(draft as TapHoldBinding), hold: t })}
+                />
+              </Box>
+              <Box>
+                <Text
+                  fontSize="9px"
+                  fontFamily="mono"
+                  color="text.muted"
+                  textTransform="uppercase"
+                  letterSpacing="0.06em"
+                  mb={1}
+                >
+                  Timeout
+                </Text>
+                <HStack spacing={1}>
+                  <Input
+                    size="xs"
+                    type="number"
+                    min={50}
+                    max={2000}
+                    w="64px"
+                    value={(draft as TapHoldBinding).timeout}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (!isNaN(v))
+                        onChange({
+                          ...(draft as TapHoldBinding),
+                          timeout: Math.max(50, Math.min(2000, v)),
+                        });
+                    }}
+                    fontFamily="mono"
+                  />
+                  <Text fontSize="10px" color="text.muted">
+                    ms
+                  </Text>
+                </HStack>
+              </Box>
+            </Flex>
+            <TapHoldPreview
+              keyLabel={hhkbKeyLabel(draft.sourceIndex)}
+              tap={(draft as TapHoldBinding).tap}
+              hold={(draft as TapHoldBinding).hold}
+              timeoutMs={(draft as TapHoldBinding).timeout}
+            />
+          </>
         )}
 
         {draft.type === 'layer-switch' && (
@@ -760,25 +891,77 @@ function EditRow({
           </Flex>
         )}
 
-        {/* Confirm / cancel */}
-        <Flex justify="flex-end" gap={1.5} pt={0.5}>
-          <Button
-            size="xs"
-            variant="ghost"
-            leftIcon={<X size={11} />}
-            onClick={onCancel}
-          >
-            Cancel
-          </Button>
-          <Button
-            size="xs"
-            leftIcon={<Check size={11} />}
-            onClick={onConfirm}
-          >
-            {isNew ? 'Add' : 'Apply'}
-          </Button>
-        </Flex>
+        {/* Confirm / cancel — only when there are sibling rows to disambiguate
+            from. In focus mode the footer's "Save & Apply" auto-commits. */}
+        {showActions && (
+          <Flex justify="flex-end" gap={1.5} pt={0.5}>
+            <Button
+              size="xs"
+              variant="ghost"
+              leftIcon={<X size={11} />}
+              onClick={onCancel}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="xs"
+              leftIcon={<Check size={11} />}
+              onClick={onConfirm}
+            >
+              {isNew ? 'Add' : 'Apply'}
+            </Button>
+          </Flex>
+        )}
       </VStack>
+    </Box>
+  );
+}
+
+// ─── Tap-Hold inline preview ─────────────────────────────────────────────────
+
+/**
+ * Spell out exactly what a tap-hold binding will do at runtime so users don't
+ * misread it as "long-press fires Tap+Hold combined". Tap fires on quick
+ * release; Hold engages a modifier-style state that combines with whatever
+ * key the user presses next.
+ */
+function TapHoldPreview({
+  keyLabel,
+  tap,
+  hold,
+  timeoutMs,
+}: {
+  keyLabel: string;
+  tap: string;
+  hold: string;
+  timeoutMs: number;
+}) {
+  const tapLabel = tokenToLabel(tap);
+  const holdLabel = tokenToLabel(hold);
+  return (
+    <Box
+      px={2.5}
+      py={1.5}
+      borderRadius="sm"
+      bg="bg.subtle"
+      border="1px dashed"
+      borderColor="border.subtle"
+    >
+      <Text
+        fontSize="10px"
+        fontFamily="mono"
+        color="text.muted"
+        lineHeight="1.6"
+      >
+        Tap <Text as="span" color="text.primary">{keyLabel}</Text> (&lt;{timeoutMs}ms) →{' '}
+        <Text as="span" color="accent.primary">{tapLabel}</Text>
+        {'  ·  '}
+        Hold <Text as="span" color="text.primary">{keyLabel}</Text> →{' '}
+        <Text as="span" color="accent.primary">{holdLabel}</Text>
+        {'  ·  '}
+        Hold <Text as="span" color="text.primary">{keyLabel}</Text> + key →{' '}
+        <Text as="span" color="accent.primary">{holdLabel}+key</Text>
+      </Text>
     </Box>
   );
 }
@@ -805,5 +988,87 @@ function TokenSelect({
         </option>
       ))}
     </Select>
+  );
+}
+
+// ─── Kanata permission banner ─────────────────────────────────────────────────
+
+const IS_MACOS =
+  typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
+
+function KanataPermissionBanner({
+  binaryPath,
+  daemonClient,
+}: {
+  binaryPath: string | null;
+  detail: string | null;
+  daemonClient: DaemonClient | null;
+}) {
+  const toast = useToast();
+
+  function openSettings() {
+    // Direct deep-link into Privacy & Security → Input Monitoring on macOS.
+    // Browsers won't open this URL with `window.open`; an `<a>` click works.
+    const a = document.createElement('a');
+    a.href = 'x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent';
+    a.rel = 'noopener';
+    a.click();
+  }
+
+  async function showInFinder() {
+    if (!daemonClient) return;
+    try {
+      await daemonClient.kanataReveal();
+    } catch (e) {
+      toast({
+        title: 'Could not open Finder',
+        description: e instanceof Error ? e.message : String(e),
+        status: 'error',
+        duration: 3000,
+      });
+    }
+  }
+
+  return (
+    <Box
+      mb={3}
+      p={3}
+      borderRadius="md"
+      border="1px solid"
+      borderColor="warning"
+      bg="warning.subtle"
+    >
+      <HStack spacing={2} align="flex-start">
+        <Box color="warning" mt="2px" flexShrink={0}>
+          <ShieldAlert size={14} />
+        </Box>
+        <Box flex="1" minW={0}>
+          <Text fontSize="xs" fontWeight={600} color="text.primary" lineHeight="1.4">
+            kanata 還沒拿到權限 — macros 暫時不會生效
+          </Text>
+          <Text fontSize="11px" color="text.secondary" mt={1} lineHeight="1.5">
+            按 <Text as="span" fontWeight={600}>Show in Finder</Text> 把{' '}
+            <Text as="span" fontFamily="mono">RoninKB Kanata.app</Text>{' '}
+            拖進「系統設定 → 隱私權 → 輸入監控」就生效。
+          </Text>
+          <HStack spacing={2} mt={2} flexWrap="wrap">
+            <Button
+              size="xs"
+              leftIcon={<ExternalLink size={11} />}
+              onClick={() => void showInFinder()}
+              isDisabled={!daemonClient || !binaryPath}
+              variant="solid"
+            >
+              Show in Finder
+            </Button>
+            {IS_MACOS && (
+              <Button size="xs" variant="outline" onClick={openSettings}>
+                Open Input Monitoring
+              </Button>
+            )}
+          </HStack>
+        </Box>
+      </HStack>
+    </Box>
   );
 }

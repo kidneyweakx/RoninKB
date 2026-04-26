@@ -41,6 +41,15 @@ interface DeviceState {
   disconnect: () => Promise<void>;
   loadKeymaps: () => Promise<void>;
   loadKeymapsFromDaemon: () => Promise<void>;
+  /**
+   * Hydrate base/fn keymaps from a profile's stored
+   * `_roninKB.hardware.raw_layers`. Used in BT-only mode where the EEPROM
+   * is not reachable but the user still needs to see the layout.
+   * Returns true when keymap was hydrated.
+   */
+  loadKeymapsFromProfile: (
+    rawLayers: { base: number[]; fn: number[] } | undefined,
+  ) => boolean;
   setBaseKeymap: (km: Keymap) => void;
   setFnKeymap: (km: Keymap) => void;
   setKeyOverride: (index: number, value: number, layer: 'base' | 'fn') => void;
@@ -170,6 +179,15 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
             : 'daemon keymap read failed',
       });
     }
+  },
+
+  loadKeymapsFromProfile(raw) {
+    if (!raw || raw.base.length !== 128 || raw.fn.length !== 128) return false;
+    set({
+      baseKeymap: new Keymap(new Uint8Array(raw.base)),
+      fnKeymap: new Keymap(new Uint8Array(raw.fn)),
+    });
+    return true;
   },
 
   transportMode() {
