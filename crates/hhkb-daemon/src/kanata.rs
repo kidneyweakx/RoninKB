@@ -32,8 +32,7 @@ use crate::error::ApiError;
 /// Raw bytes of the kanata binary downloaded at build time.
 /// Only present when compiled with `--features bundled-kanata`.
 #[cfg(feature = "bundled-kanata")]
-static BUNDLED_KANATA: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/kanata-bundle"));
+static BUNDLED_KANATA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/kanata-bundle"));
 
 /// Extract the bundled kanata binary to a discoverable location and return
 /// its path. Re-extracts only when the on-disk size differs (i.e. the
@@ -275,7 +274,7 @@ impl KanataManager {
     pub fn input_monitoring_granted(&self) -> Option<bool> {
         #[cfg(target_os = "macos")]
         {
-            return Some(macos_input_monitoring_granted());
+            Some(macos_input_monitoring_granted())
         }
         #[cfg(not(target_os = "macos"))]
         {

@@ -48,8 +48,7 @@ fn bundle_kanata() {
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let bundle_path = std::path::Path::new(&out_dir).join("kanata-bundle");
     let version_file = std::path::Path::new(&out_dir).join("kanata-bundle.version");
-    let version =
-        std::env::var("KANATA_VERSION").unwrap_or_else(|_| "v1.11.0".to_string());
+    let version = std::env::var("KANATA_VERSION").unwrap_or_else(|_| "v1.11.0".to_string());
 
     // Skip download if we already have the right version cached in OUT_DIR.
     if bundle_path.exists() {
@@ -83,9 +82,7 @@ fn bundle_kanata() {
         );
     };
 
-    let url = format!(
-        "https://github.com/jtroo/kanata/releases/download/{version}/{zip_name}"
-    );
+    let url = format!("https://github.com/jtroo/kanata/releases/download/{version}/{zip_name}");
     let zip_path = std::path::Path::new(&out_dir).join("kanata-download.zip");
 
     println!("cargo:warning=bundled-kanata: downloading {version} for {target}…");
@@ -103,11 +100,10 @@ fn bundle_kanata() {
     );
 
     // Extract the binary from the zip archive.
-    let zip_data = std::fs::read(&zip_path)
-        .expect("bundled-kanata: could not read downloaded zip");
+    let zip_data = std::fs::read(&zip_path).expect("bundled-kanata: could not read downloaded zip");
     let cursor = std::io::Cursor::new(zip_data);
-    let mut archive = zip::ZipArchive::new(cursor)
-        .expect("bundled-kanata: downloaded file is not a valid zip");
+    let mut archive =
+        zip::ZipArchive::new(cursor).expect("bundled-kanata: downloaded file is not a valid zip");
     let mut entry = archive.by_name(bin_name).unwrap_or_else(|_| {
         panic!("bundled-kanata: '{bin_name}' not found in zip — check kanata release assets")
     });
@@ -121,9 +117,7 @@ fn bundle_kanata() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&bundle_path)
-            .unwrap()
-            .permissions();
+        let mut perms = std::fs::metadata(&bundle_path).unwrap().permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(&bundle_path, perms).unwrap();
     }

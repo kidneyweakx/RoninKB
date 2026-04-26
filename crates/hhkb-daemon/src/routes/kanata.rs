@@ -159,9 +159,7 @@ pub async fn reveal(State(state): State<AppState>) -> ApiResult<Json<RevealRespo
     #[cfg(target_os = "linux")]
     {
         let parent = path.parent().unwrap_or(std::path::Path::new("."));
-        let _ = std::process::Command::new("xdg-open")
-            .arg(parent)
-            .spawn();
+        let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
     }
     #[cfg(target_os = "windows")]
     {
