@@ -69,12 +69,11 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         tokio::select! {
             maybe_msg = socket.recv() => {
                 match maybe_msg {
-                    Some(Ok(Message::Text(t))) => {
+                    Some(Ok(Message::Text(t)))
                         if t.trim() == "ping"
-                            && socket.send(Message::Text("pong".to_string())).await.is_err()
-                        {
-                            break;
-                        }
+                            && socket.send(Message::Text("pong".to_string())).await.is_err() =>
+                    {
+                        break;
                     }
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Err(_)) => break,
