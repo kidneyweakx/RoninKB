@@ -338,15 +338,14 @@ impl KanataManager {
             .as_ref()
             .ok_or(ApiError::KanataNotInstalled)?;
 
-        #[cfg(target_os = "macos")]
-        if !macos_input_monitoring_granted() {
-            let msg = "macOS Input Monitoring / Accessibility permission is required for kanata. \
-Open System Settings -> Privacy & Security -> Input Monitoring, then allow RoninKB/kanata."
-                .to_string();
-            self.set_last_error(Some(msg.clone()));
-            return Err(ApiError::KanataPermissionRequired(msg));
-        }
-
+        // NOTE: we deliberately do NOT call `macos_input_monitoring_granted()`
+        // here. That preflight runs in the daemon process, but the binary
+        // that actually needs Input Monitoring permission is `kanata` (which
+        // is signed/identified separately by macOS TCC). The daemon's own
+        // grant state is therefore unrelated. Letting kanata spawn lets it
+        // ask TCC under its own identity; the startup-grace check below
+        // catches a fast-exit caused by missing perm and surfaces it via
+        // stderr_tail + last_error.
         let mut guard = self.process.lock().expect("kanata process mutex poisoned");
         if guard.is_some() {
             return Err(ApiError::KanataAlreadyRunning);

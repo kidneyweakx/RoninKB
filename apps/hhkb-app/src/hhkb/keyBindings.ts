@@ -180,30 +180,39 @@ function extractBlock(src: string, keywordPattern: string): string | null {
 /**
  * Parse a kanata `.kbd` config string into the high-level `KeyBinding` model.
  *
- * Only reads the `(deflayer base ...)` block — other deflayer blocks and
- * defalias forms are ignored (they round-trip through `generateKanataConfig`
- * as-is when re-saved). Returns an empty array for empty / unparseable configs.
+ * Reads `(defsrc ...)` to learn each slot's physical key (translated back via
+ * `HHKB_INDEX_TO_KANATA`) and pairs it with the matching action in
+ * `(deflayer base ...)`. Other deflayer blocks and defalias forms are
+ * ignored — they round-trip through `generateKanataConfig` only for keys
+ * actually bound. Returns `[]` for empty / unparseable configs.
  */
 export function parseKeyBindings(config: string): KeyBinding[] {
   if (!config.trim()) return [];
   const cleaned = config.replace(/;;[^\n]*/g, '');
 
-  const block = extractBlock(cleaned, 'deflayer\\s+base');
-  if (!block) return [];
+  const baseBlock = extractBlock(cleaned, 'deflayer\\s+base');
+  const defsrcBlock = extractBlock(cleaned, 'defsrc');
+  if (!baseBlock || !defsrcBlock) return [];
 
-  // Strip outer `(deflayer base ...)` wrapper to get the body tokens
-  const inner = block
+  const baseInner = baseBlock
     .replace(/^\(\s*deflayer\s+base\s*/, '')
     .replace(/\)\s*$/, '');
-  const tokens = tokenizeBody(inner);
+  const defsrcInner = defsrcBlock
+    .replace(/^\(\s*defsrc\s*/, '')
+    .replace(/\)\s*$/, '');
+
+  const actions = tokenizeBody(baseInner);
+  const sources = tokenizeBody(defsrcInner);
 
   const bindings: KeyBinding[] = [];
 
-  for (let i = 0; i < Math.min(tokens.length, 60); i++) {
-    const tok = tokens[i];
-    const sourceIndex = i + 1; // HHKB indices are 1-based
-
+  for (let i = 0; i < Math.min(sources.length, actions.length); i++) {
+    const srcTok = sources[i];
+    const tok = actions[i];
     if (!tok || tok === '_' || tok === 'XX' || tok === 'xx') continue;
+
+    const sourceIndex = KANATA_TOKEN_TO_HHKB_INDEX[srcTok];
+    if (!sourceIndex) continue; // unknown defsrc token — drop silently
 
     // tap-hold: (tap-hold timeout timeout tap hold)
     const th = /^\(tap-hold\s+(\d+)\s+\d+\s+(\S+)\s+(\S+)\)$/.exec(tok);
@@ -241,48 +250,100 @@ export function parseKeyBindings(config: string): KeyBinding[] {
 
 // ─── Code generator ──────────────────────────────────────────────────────────
 
-const KEY_TOKENS = Array.from({ length: 60 }, (_, i) => `k${i + 1}`);
+/**
+ * Map HHKB EEPROM key index (1..60) → kanata key token.
+ *
+ * kanata's `defsrc` requires real OS-recognised key names so its event tap
+ * can match incoming HID codes; placeholder tokens like `k1` are rejected
+ * with `Unknown key in defsrc`.
+ *
+ * Index numbering matches `apps/hhkb-app/src/data/hhkbLayout.ts`. The HHKB
+ * physical Fn key (index 6) is intentionally absent — the keyboard handles
+ * Fn internally and the OS never sees it as a discrete keycode, so kanata
+ * has nothing to bind to.
+ */
+const HHKB_INDEX_TO_KANATA: Readonly<Record<number, string>> = {
+  // Row 0 — number row
+  60: 'esc', 59: '1', 58: '2', 57: '3', 56: '4', 55: '5',
+  54: '6', 53: '7', 52: '8', 51: '9', 50: '0', 49: '-',
+  48: '=', 47: 'grv', 46: 'bspc',
+  // Row 1 — Q row
+  45: 'tab', 44: 'q', 43: 'w', 42: 'e', 41: 'r', 40: 't',
+  39: 'y', 38: 'u', 37: 'i', 36: 'o', 35: 'p',
+  34: '[', 33: ']', 32: '\\',
+  // Row 2 — A row (HHKB ships Control here, not Caps)
+  31: 'lctl', 30: 'a', 29: 's', 28: 'd', 27: 'f', 26: 'g',
+  25: 'h', 24: 'j', 23: 'k', 22: 'l', 21: ';', 20: "'",
+  19: 'ret',
+  // Row 3 — Z row (index 6 = HHKB-internal Fn, omitted)
+  18: 'lsft', 17: 'z', 16: 'x', 15: 'c', 14: 'v', 13: 'b',
+  12: 'n', 11: 'm', 10: ',', 9: '.', 8: '/', 7: 'rsft',
+  // Row 4 — modifier row
+  5: 'lmet', 4: 'lalt', 3: 'spc', 2: 'ralt', 1: 'rmet',
+};
+
+/** Reverse of `HHKB_INDEX_TO_KANATA`, used by the parser to map a kanata
+ *  defsrc token back to its physical HHKB key index on round-trip. */
+const KANATA_TOKEN_TO_HHKB_INDEX: Readonly<Record<string, number>> = (() => {
+  const out: Record<string, number> = {};
+  for (const [idx, tok] of Object.entries(HHKB_INDEX_TO_KANATA)) {
+    out[tok] = Number(idx);
+  }
+  return out;
+})();
+
+export function hhkbIndexToKanata(index: number): string | undefined {
+  return HHKB_INDEX_TO_KANATA[index];
+}
 
 /**
  * Generate a complete kanata `.kbd` config from the given bindings.
- * Emits `(defsrc k1…k60)` + `(deflayer base ...)` + stub deflayer blocks
- * for any layer-switch targets.
+ *
+ * Only HHKB keys with an explicit binding go into `defsrc` — anything else
+ * is passed through to the OS unchanged. Stub `deflayer` blocks are emitted
+ * for layer-switch targets so kanata doesn't error on undefined layers.
  */
 export function generateKanataConfig(bindings: KeyBinding[]): string {
   if (bindings.length === 0) return '';
 
-  const slots: string[] = new Array(60).fill('_');
+  // Keep deterministic ordering so a config diff is reviewable.
+  const sorted = [...bindings].sort((a, b) => a.sourceIndex - b.sourceIndex);
 
-  for (const b of bindings) {
-    const pos = b.sourceIndex - 1;
-    if (pos < 0 || pos >= 60) continue;
+  const tokens: string[] = [];
+  const actions: string[] = [];
+
+  for (const b of sorted) {
+    const src = HHKB_INDEX_TO_KANATA[b.sourceIndex];
+    if (!src) continue; // unbindable physical key (e.g. HHKB Fn) — silently skip
+    tokens.push(src);
 
     switch (b.type) {
       case 'remap':
-        slots[pos] = b.target;
+        actions.push(b.target);
         break;
       case 'tap-hold':
-        slots[pos] = `(tap-hold ${b.timeout} ${b.timeout} ${b.tap} ${b.hold})`;
+        actions.push(`(tap-hold ${b.timeout} ${b.timeout} ${b.tap} ${b.hold})`);
         break;
       case 'layer-switch': {
         const kind = b.mode === 'toggle' ? 'layer-toggle' : 'layer-while-held';
-        slots[pos] = `(${kind} ${b.layerName})`;
+        actions.push(`(${kind} ${b.layerName})`);
         break;
       }
     }
   }
 
-  const defsrc = `(defsrc\n  ${KEY_TOKENS.join(' ')}\n)`;
-  const deflayerBase = `(deflayer base\n  ${slots.join(' ')}\n)`;
+  if (tokens.length === 0) return '';
 
-  // Emit empty stub deflayers for any referenced layer names so kanata
-  // doesn't error on missing layer declarations.
+  const defsrc = `(defsrc\n  ${tokens.join(' ')}\n)`;
+  const deflayerBase = `(deflayer base\n  ${actions.join(' ')}\n)`;
+
   const layerNames = new Set<string>();
   for (const b of bindings) {
     if (b.type === 'layer-switch') layerNames.add(b.layerName);
   }
+  const blanks = new Array(tokens.length).fill('_').join(' ');
   const extraLayers = [...layerNames].map(
-    (name) => `(deflayer ${name}\n  ${new Array(60).fill('_').join(' ')}\n)`,
+    (name) => `(deflayer ${name}\n  ${blanks}\n)`,
   );
 
   return [defsrc, deflayerBase, ...extraLayers].join('\n\n');

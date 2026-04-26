@@ -133,10 +133,60 @@ export function BindingsPanel({ focusKeyIndex, onSaved, onCancel }: Props) {
   const daemonClient = useDaemonStore((s) => s.client);
   const kanataProcessState = useKanataStore((s) => s.processState);
   const kanataStart = useKanataStore((s) => s.start);
+  const kanataStop = useKanataStore((s) => s.stop);
+  const kanataFetchStatus = useKanataStore((s) => s.fetchStatus);
   const kanataInputMonitoring = useKanataStore((s) => s.inputMonitoringGranted);
   const kanataBinaryPath = useKanataStore((s) => s.binaryPath);
   const kanataLastError = useKanataStore((s) => s.error);
   const kanataInstalled = useKanataStore((s) => s.installed);
+  const [activating, setActivating] = useState(false);
+
+  /**
+   * (Re)start kanata. Use this after the user has just toggled
+   * "RoninKB Kanata" on in System Settings.
+   *
+   * We deliberately do NOT gate on `inputMonitoringGranted` — that flag
+   * comes from the daemon's own TCC state, but the binary that actually
+   * needs the grant is `kanata`, signed/identified separately. The
+   * authoritative answer comes from kanata's own startup probe.
+   */
+  async function activateKanata() {
+    setActivating(true);
+    try {
+      const fresh = useKanataStore.getState();
+      if (fresh.processState === 'running') {
+        try {
+          await kanataStop();
+        } catch {
+          // best-effort stop; the start below surfaces the real error
+        }
+      }
+      await kanataStart();
+      await kanataFetchStatus();
+      toast({
+        title: 'Kanata 已啟動',
+        description: 'macros 現在會生效。',
+        status: 'success',
+        duration: 2500,
+      });
+    } catch (e) {
+      // Pull the freshest stderr/last_error so the toast describes what
+      // actually went wrong (kanata config parse, missing permission, …).
+      await kanataFetchStatus();
+      const detail =
+        useKanataStore.getState().error ??
+        (e instanceof Error ? e.message : String(e));
+      toast({
+        title: 'Kanata 啟動失敗',
+        description: detail,
+        status: 'error',
+        duration: 7000,
+        isClosable: true,
+      });
+    } finally {
+      setActivating(false);
+    }
+  }
 
   const initialConfig = useMemo(
     () => activeProfile?.via._roninKB?.software?.config ?? '',
@@ -392,6 +442,8 @@ export function BindingsPanel({ focusKeyIndex, onSaved, onCancel }: Props) {
           binaryPath={kanataBinaryPath}
           detail={kanataLastError}
           daemonClient={daemonClient}
+          onActivate={() => void activateKanata()}
+          activating={activating}
         />
       )}
 
@@ -999,10 +1051,14 @@ const IS_MACOS =
 function KanataPermissionBanner({
   binaryPath,
   daemonClient,
+  onActivate,
+  activating,
 }: {
   binaryPath: string | null;
   detail: string | null;
   daemonClient: DaemonClient | null;
+  onActivate: () => void;
+  activating: boolean;
 }) {
   const toast = useToast();
 
@@ -1054,15 +1110,26 @@ function KanataPermissionBanner({
           <HStack spacing={2} mt={2} flexWrap="wrap">
             <Button
               size="xs"
+              leftIcon={<Check size={11} />}
+              onClick={onActivate}
+              isLoading={activating}
+              loadingText="啟動中…"
+              variant="solid"
+              colorScheme="green"
+            >
+              加好了 — 啟動 kanata
+            </Button>
+            <Button
+              size="xs"
               leftIcon={<ExternalLink size={11} />}
               onClick={() => void showInFinder()}
               isDisabled={!daemonClient || !binaryPath}
-              variant="solid"
+              variant="outline"
             >
               Show in Finder
             </Button>
             {IS_MACOS && (
-              <Button size="xs" variant="outline" onClick={openSettings}>
+              <Button size="xs" variant="ghost" onClick={openSettings}>
                 Open Input Monitoring
               </Button>
             )}
