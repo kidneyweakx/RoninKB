@@ -9,13 +9,11 @@ class Roninkb < Formula
     sha256 "f2530061c42f1b7d44b9af43d032590af6b754e2f05aa1925920acae2d7da511"
 
     # kanata can't grab keys on macOS without Karabiner-DriverKit-VirtualHIDDevice.
-    # Karabiner-Elements bundles that driver and is the only homebrew-cask path
-    # to it. Users must still launch Karabiner-Elements once after install to
-    # trigger the sysext approval prompt — Apple gates the activation behind a
-    # user click in System Settings → Privacy & Security and no installer can
-    # bypass it. The daemon's /kanata/status endpoint surfaces driver_activated
-    # so the web UI can guide users through the approval.
-    depends_on cask: "karabiner-elements"
+    # Karabiner-Elements bundles that driver. We can't `depends_on cask: ...`
+    # from a third-party tap (Homebrew rejects it as an unsupported special
+    # dependency), so the caveats below walk users through the one-line cask
+    # install. The daemon's /kanata/status endpoint surfaces driver_activated
+    # so the web UI also surfaces the missing-driver state interactively.
   end
 
   on_linux do
@@ -59,11 +57,16 @@ class Roninkb < Formula
         hhkb dump
 
       macOS first-run setup (kanata software-binding layer):
-        1. Open Karabiner-Elements.app once (Finder → Applications). It will
-           prompt for the Karabiner-DriverKit-VirtualHIDDevice system
-           extension; approve it in System Settings → Privacy & Security.
-           A reboot may be required the very first time.
-        2. Grant Input Monitoring to the kanata binary in System Settings →
+        1. Install Karabiner-Elements — it ships the DriverKit system extension
+           kanata needs in order to grab keys (no other supported install path
+           on macOS):
+             brew install --cask karabiner-elements
+        2. Open /Applications/Karabiner-Elements.app once. It will prompt for
+           the Karabiner-DriverKit-VirtualHIDDevice system extension; approve
+           it in System Settings → Privacy & Security → Login Items &
+           Extensions → Driver Extensions. A reboot may be required the very
+           first time.
+        3. Grant Input Monitoring to the kanata binary in System Settings →
            Privacy & Security → Input Monitoring. The bundle path is:
              ~/Applications/RoninKB Kanata.app/Contents/MacOS/kanata
 
