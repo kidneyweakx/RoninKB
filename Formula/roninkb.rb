@@ -6,7 +6,7 @@ class Roninkb < Formula
 
   on_macos do
     url "https://github.com/kidneyweakx/RoninKB/releases/download/v#{version}/roninKB-v#{version}-universal-apple-darwin.tar.gz"
-    sha256 "a2a3acdfb0443ff5bda45ca20dfa9e61cbc8eea99fbe73de654a9526316b5616"
+    sha256 "f2530061c42f1b7d44b9af43d032590af6b754e2f05aa1925920acae2d7da511"
 
     # kanata can't grab keys on macOS without Karabiner-DriverKit-VirtualHIDDevice.
     # Karabiner-Elements bundles that driver and is the only homebrew-cask path
@@ -23,7 +23,7 @@ class Roninkb < Formula
     # and we bundle kanata. Linux ARM users can build from source.
     on_intel do
       url "https://github.com/kidneyweakx/RoninKB/releases/download/v#{version}/roninKB-v#{version}-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "e2924a77094a8143c47fcda1974b6bdd6ec7384c42acb87837a6794b0f861822"
+      sha256 "6c244237f2ca39e2bd96ec9a6762dc111826f44b49ff0a72f4ef88dc26e13071"
     end
   end
 
