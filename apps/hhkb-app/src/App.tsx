@@ -152,7 +152,7 @@ export default function App() {
                     <HStack spacing={1.5}>
                       <Box
                         w="8px" h="8px" borderRadius="full"
-                        bg="accent.primary" flexShrink={0}
+                        bg="kanata.fg" flexShrink={0}
                       />
                       <Text fontSize="10px" color="text.muted" fontFamily="mono">
                         SW override
@@ -161,7 +161,7 @@ export default function App() {
                     <HStack spacing={1.5}>
                       <Box
                         w="8px" h="8px" borderRadius="full"
-                        bg="#f97316" flexShrink={0}
+                        bg="hardware.fg" flexShrink={0}
                       />
                       <Text fontSize="10px" color="text.muted" fontFamily="mono">
                         HW modified

@@ -13,7 +13,7 @@
  * mode (or adds a new one if the key has no existing binding).
  */
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   Alert,
   AlertIcon,
@@ -23,14 +23,36 @@ import {
   HStack,
   IconButton,
   Input,
-  Select,
+  InputGroup,
+  InputLeftElement,
+  Popover,
+  PopoverArrow,
+  PopoverBody,
+  PopoverContent,
+  PopoverTrigger,
+  SimpleGrid,
   Tag,
   Text,
+  Tooltip,
+  useDisclosure,
   useToast,
   VStack,
 } from '@chakra-ui/react';
-import { Check, ExternalLink, Pencil, Plus, ShieldAlert, Trash2, X } from 'lucide-react';
-import { HHKB_LAYOUT } from '../data/hhkbLayout';
+import {
+  Check,
+  ChevronDown,
+  ExternalLink,
+  Layers,
+  Pencil,
+  Plus,
+  Repeat,
+  Search,
+  ShieldAlert,
+  Timer,
+  Trash2,
+  X,
+} from 'lucide-react';
+import { HHKB_LAYOUT, type HhkbKey } from '../data/hhkbLayout';
 import { useDaemonStore } from '../store/daemonStore';
 import { useKanataStore } from '../store/kanataStore';
 import { useProfileStore } from '../store/profileStore';
@@ -693,11 +715,6 @@ function EditRow({
    */
   showActions?: boolean;
 }) {
-  const sortedKeys = useMemo(
-    () => [...HHKB_LAYOUT].sort((a, b) => a.index - b.index),
-    [],
-  );
-
   function changeSource(idx: number) {
     onChange({ ...draft, sourceIndex: idx });
   }
@@ -729,65 +746,50 @@ function EditRow({
       bg="accent.subtle"
     >
       <VStack align="stretch" spacing={2.5}>
-        {/* Row 1: key selector + type selector */}
-        <Flex gap={3} align="flex-end">
-          <Box flex="1">
+        {/* Physical key — visual mini-grid (replaces the dropdown) */}
+        <Box>
+          <Flex justify="space-between" align="baseline" mb={1.5}>
             <Text
               fontSize="9px"
               fontFamily="mono"
               color="text.muted"
               textTransform="uppercase"
               letterSpacing="0.06em"
-              mb={1}
             >
               Physical Key
             </Text>
-            <Select
-              size="xs"
-              value={draft.sourceIndex}
-              onChange={(e) => changeSource(Number(e.target.value))}
-              fontFamily="mono"
-              borderColor={keyConflict ? 'orange.400' : undefined}
-            >
-              {sortedKeys.map((k) => (
-                <option
-                  key={k.index}
-                  value={k.index}
-                  disabled={isNew && usedIndices.has(k.index) && k.index !== draft.sourceIndex}
-                >
-                  {k.label} (#{k.index})
-                </option>
-              ))}
-            </Select>
-            {keyConflict && (
-              <Text fontSize="9px" color="orange.400" mt={0.5}>
-                Already mapped — will be overwritten
-              </Text>
-            )}
-          </Box>
-          <Box flex="0.9">
-            <Text
-              fontSize="9px"
-              fontFamily="mono"
-              color="text.muted"
-              textTransform="uppercase"
-              letterSpacing="0.06em"
-              mb={1}
-            >
-              Type
+            <Text fontSize="10px" fontFamily="mono" color="kanata.fg">
+              {hhkbKeyLabel(draft.sourceIndex)}{' '}
+              <Text as="span" color="text.muted">#{draft.sourceIndex}</Text>
             </Text>
-            <Select
-              size="xs"
-              value={draft.type}
-              onChange={(e) => changeType(e.target.value as KeyBinding['type'])}
-              fontFamily="mono"
-            >
-              <option value="remap">Remap</option>
-              <option value="tap-hold">Tap-Hold</option>
-              <option value="layer-switch">Layer Switch</option>
-            </Select>
-          </Box>
-        </Flex>
+          </Flex>
+          <HhkbKeyPicker
+            value={draft.sourceIndex}
+            onChange={changeSource}
+            usedIndices={usedIndices}
+            isNew={isNew}
+          />
+          {keyConflict && (
+            <Text fontSize="9px" color="orange.400" mt={1}>
+              Already mapped — will be overwritten
+            </Text>
+          )}
+        </Box>
+
+        {/* Binding type — segmented control (replaces the dropdown) */}
+        <Box>
+          <Text
+            fontSize="9px"
+            fontFamily="mono"
+            color="text.muted"
+            textTransform="uppercase"
+            letterSpacing="0.06em"
+            mb={1}
+          >
+            Type
+          </Text>
+          <TypeSegmented value={draft.type} onChange={changeType} />
+        </Box>
 
         {/* Row 2: binding-specific fields */}
         {draft.type === 'remap' && (
@@ -802,7 +804,7 @@ function EditRow({
             >
               Send Key
             </Text>
-            <TokenSelect
+            <TokenPicker
               value={(draft as RemapBinding).target}
               onChange={(t) => onChange({ ...(draft as RemapBinding), target: t })}
             />
@@ -823,7 +825,7 @@ function EditRow({
                 >
                   Tap
                 </Text>
-                <TokenSelect
+                <TokenPicker
                   value={(draft as TapHoldBinding).tap}
                   onChange={(t) => onChange({ ...(draft as TapHoldBinding), tap: t })}
                 />
@@ -839,7 +841,7 @@ function EditRow({
                 >
                   Hold
                 </Text>
-                <TokenSelect
+                <TokenPicker
                   value={(draft as TapHoldBinding).hold}
                   onChange={(t) => onChange({ ...(draft as TapHoldBinding), hold: t })}
                 />
@@ -925,20 +927,12 @@ function EditRow({
               >
                 Activate
               </Text>
-              <Select
-                size="xs"
+              <ModeSegmented
                 value={(draft as LayerSwitchBinding).mode}
-                onChange={(e) =>
-                  onChange({
-                    ...(draft as LayerSwitchBinding),
-                    mode: e.target.value as 'while-held' | 'toggle',
-                  })
+                onChange={(m) =>
+                  onChange({ ...(draft as LayerSwitchBinding), mode: m })
                 }
-                fontFamily="mono"
-              >
-                <option value="while-held">While Held</option>
-                <option value="toggle">Toggle</option>
-              </Select>
+              />
             </Box>
           </Flex>
         )}
@@ -1018,28 +1012,545 @@ function TapHoldPreview({
   );
 }
 
-// ─── Token select ─────────────────────────────────────────────────────────────
+// ─── Binding pickers ──────────────────────────────────────────────────────────
 
-function TokenSelect({
+// Mini-grid geometry. UNIT*15 + GAP*14 must comfortably fit the modal's ~440px
+// content width. 24+4 → 416px row width; height 5*24 + 4*4 = 136px.
+const MINI_UNIT = 24;
+const MINI_GAP = 4;
+const MINI_PAD = 4;
+const MINI_RADIUS = 4;
+
+/**
+ * Compact, click-to-pick HHKB grid. Replaces the Physical-Key dropdown so the
+ * user can target a key visually instead of scrolling through 60 entries.
+ *
+ *  - Used keys (already bound elsewhere) render disabled
+ *  - The current draft selection gets the kanata cyan-teal accent
+ *  - Hover highlights non-disabled keys
+ */
+function HhkbKeyPicker({
+  value,
+  onChange,
+  usedIndices,
+  isNew,
+}: {
+  value: number;
+  onChange: (idx: number) => void;
+  usedIndices: Set<number>;
+  isNew: boolean;
+}) {
+  const dims = useMemo(() => {
+    const maxCols = Math.max(
+      ...HHKB_LAYOUT.map((k) => k.col + (k.width ?? 1)),
+    );
+    const rows = Math.max(...HHKB_LAYOUT.map((k) => k.row)) + 1;
+    const w = maxCols * MINI_UNIT + (maxCols - 1) * MINI_GAP + MINI_PAD * 2;
+    const h = rows * MINI_UNIT + (rows - 1) * MINI_GAP + MINI_PAD * 2;
+    return { w, h };
+  }, []);
+
+  return (
+    <Box
+      w="100%"
+      maxW={`${dims.w}px`}
+      mx="auto"
+      borderRadius="md"
+      border="1px solid"
+      borderColor="border.subtle"
+      bg="bg.subtle"
+      overflowX="auto"
+    >
+      <svg
+        viewBox={`0 0 ${dims.w} ${dims.h}`}
+        width="100%"
+        style={{ display: 'block', maxWidth: `${dims.w}px` }}
+        role="group"
+        aria-label="Pick HHKB physical key"
+      >
+        {HHKB_LAYOUT.map((k) => (
+          <MiniKey
+            key={k.index}
+            k={k}
+            selected={k.index === value}
+            disabled={isNew && k.index !== value && usedIndices.has(k.index)}
+            onSelect={onChange}
+          />
+        ))}
+      </svg>
+    </Box>
+  );
+}
+
+function MiniKey({
+  k,
+  selected,
+  disabled,
+  onSelect,
+}: {
+  k: HhkbKey;
+  selected: boolean;
+  disabled: boolean;
+  onSelect: (idx: number) => void;
+}) {
+  const w = k.width ?? 1;
+  const x = MINI_PAD + k.col * (MINI_UNIT + MINI_GAP);
+  const y = MINI_PAD + k.row * (MINI_UNIT + MINI_GAP);
+  const keyW = w * MINI_UNIT + (w - 1) * MINI_GAP;
+
+  // Heuristic: shrink the label font as the key gets narrower or the legend
+  // gets longer, so multi-char labels like "Control"/"Return" still fit.
+  const fontSize = k.label.length <= 1 ? 11 : k.label.length <= 3 ? 9 : 8;
+
+  return (
+    <g
+      onClick={disabled ? undefined : () => onSelect(k.index)}
+      style={{ cursor: disabled ? 'not-allowed' : 'pointer' }}
+      opacity={disabled ? 0.35 : 1}
+      role="button"
+      aria-label={`${k.label} (#${k.index})${disabled ? ', already mapped' : ''}`}
+      aria-pressed={selected}
+      tabIndex={disabled ? -1 : 0}
+      onKeyDown={(e) => {
+        if (disabled) return;
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onSelect(k.index);
+        }
+      }}
+    >
+      <rect
+        x={x}
+        y={y}
+        width={keyW}
+        height={MINI_UNIT}
+        rx={MINI_RADIUS}
+        ry={MINI_RADIUS}
+        fill={selected ? 'var(--chakra-colors-kanata-subtle)' : 'var(--chakra-colors-bg-surface)'}
+        stroke={
+          selected
+            ? 'var(--chakra-colors-kanata-fg)'
+            : 'var(--chakra-colors-border-subtle)'
+        }
+        strokeWidth={selected ? 1.5 : 1}
+        style={{ transition: 'fill 0.12s ease, stroke 0.12s ease' }}
+      />
+      {!disabled && !selected && (
+        <rect
+          x={x}
+          y={y}
+          width={keyW}
+          height={MINI_UNIT}
+          rx={MINI_RADIUS}
+          ry={MINI_RADIUS}
+          fill="transparent"
+          stroke="transparent"
+          style={{ pointerEvents: 'all' }}
+        >
+          <title>{`${k.label} (#${k.index})`}</title>
+        </rect>
+      )}
+      <text
+        x={x + keyW / 2}
+        y={y + MINI_UNIT / 2}
+        textAnchor="middle"
+        dominantBaseline="central"
+        fontSize={fontSize}
+        fontFamily="'JetBrains Mono Variable', monospace"
+        fill={
+          selected
+            ? 'var(--chakra-colors-kanata-fg)'
+            : 'var(--chakra-colors-text-secondary)'
+        }
+        style={{ userSelect: 'none', pointerEvents: 'none' }}
+      >
+        {k.label}
+      </text>
+    </g>
+  );
+}
+
+// ─── Type segmented control ──────────────────────────────────────────────────
+
+const TYPE_OPTIONS: ReadonlyArray<{
+  value: KeyBinding['type'];
+  label: string;
+  hint: string;
+  Icon: typeof Repeat;
+}> = [
+  {
+    value: 'remap',
+    label: 'Remap',
+    hint: 'Send a different key when this key is pressed',
+    Icon: Repeat,
+  },
+  {
+    value: 'tap-hold',
+    label: 'Tap-Hold',
+    hint: 'Quick tap = one key, long press = another (great for home-row mods)',
+    Icon: Timer,
+  },
+  {
+    value: 'layer-switch',
+    label: 'Layer',
+    hint: 'Activate a kanata layer while held or toggle on press',
+    Icon: Layers,
+  },
+];
+
+function TypeSegmented({
+  value,
+  onChange,
+}: {
+  value: KeyBinding['type'];
+  onChange: (t: KeyBinding['type']) => void;
+}) {
+  return (
+    <HStack
+      spacing={0}
+      p="3px"
+      bg="bg.subtle"
+      border="1px solid"
+      borderColor="border.subtle"
+      borderRadius="md"
+      role="tablist"
+      aria-label="Binding type"
+    >
+      {TYPE_OPTIONS.map((opt) => {
+        const active = value === opt.value;
+        const Icon = opt.Icon;
+        return (
+          <Tooltip
+            key={opt.value}
+            label={opt.hint}
+            fontSize="11px"
+            placement="top"
+            hasArrow
+            openDelay={300}
+          >
+            <Box
+              as="button"
+              flex="1"
+              role="tab"
+              aria-selected={active}
+              onClick={() => onChange(opt.value)}
+              display="flex"
+              alignItems="center"
+              justifyContent="center"
+              gap={1.5}
+              px={2}
+              py={1.5}
+              borderRadius="sm"
+              bg={active ? 'kanata.subtle' : 'transparent'}
+              color={active ? 'kanata.fg' : 'text.muted'}
+              fontWeight={500}
+              fontSize="11px"
+              fontFamily="mono"
+              border="1px solid"
+              borderColor={active ? 'kanata.border' : 'transparent'}
+              transition="background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease"
+              _hover={{ color: active ? 'kanata.fg' : 'text.primary' }}
+            >
+              <Icon size={12} />
+              {opt.label}
+            </Box>
+          </Tooltip>
+        );
+      })}
+    </HStack>
+  );
+}
+
+// ─── Layer-mode segmented control (while-held / toggle) ──────────────────────
+
+function ModeSegmented({
+  value,
+  onChange,
+}: {
+  value: 'while-held' | 'toggle';
+  onChange: (m: 'while-held' | 'toggle') => void;
+}) {
+  const options: ReadonlyArray<{ id: 'while-held' | 'toggle'; label: string }> = [
+    { id: 'while-held', label: 'While Held' },
+    { id: 'toggle', label: 'Toggle' },
+  ];
+  return (
+    <HStack
+      spacing={0}
+      p="3px"
+      bg="bg.subtle"
+      border="1px solid"
+      borderColor="border.subtle"
+      borderRadius="md"
+    >
+      {options.map((o) => {
+        const active = value === o.id;
+        return (
+          <Box
+            key={o.id}
+            as="button"
+            flex="1"
+            onClick={() => onChange(o.id)}
+            px={2}
+            py={1.5}
+            borderRadius="sm"
+            bg={active ? 'kanata.subtle' : 'transparent'}
+            color={active ? 'kanata.fg' : 'text.muted'}
+            fontWeight={500}
+            fontSize="11px"
+            fontFamily="mono"
+            border="1px solid"
+            borderColor={active ? 'kanata.border' : 'transparent'}
+            transition="background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease"
+            _hover={{ color: active ? 'kanata.fg' : 'text.primary' }}
+          >
+            {o.label}
+          </Box>
+        );
+      })}
+    </HStack>
+  );
+}
+
+// ─── Token picker (search + categories + grid in a popover) ──────────────────
+
+type TokenCategory =
+  | 'all'
+  | 'letter'
+  | 'number'
+  | 'special'
+  | 'mod'
+  | 'nav'
+  | 'fn'
+  | 'media';
+
+const TOKEN_CATEGORY_LABELS: Record<TokenCategory, string> = {
+  all: 'All',
+  letter: 'Letters',
+  number: 'Numbers',
+  special: 'Special',
+  mod: 'Modifiers',
+  nav: 'Navigation',
+  fn: 'Function',
+  media: 'Media',
+};
+
+const TOKEN_CATEGORY_ORDER: TokenCategory[] = [
+  'all',
+  'letter',
+  'number',
+  'special',
+  'mod',
+  'nav',
+  'fn',
+  'media',
+];
+
+const SPECIAL_TOKENS = new Set(['esc', 'tab', 'spc', 'ret', 'bspc', 'del', 'caps']);
+const MOD_TOKENS = new Set([
+  'lctl', 'rctl', 'lsft', 'rsft', 'lalt', 'ralt', 'lmet', 'rmet',
+]);
+const NAV_TOKENS = new Set([
+  'left', 'rght', 'up', 'down', 'home', 'end', 'pgup', 'pgdn',
+]);
+const MEDIA_TOKENS = new Set(['volu', 'vold', 'mute', 'pp', 'nlck']);
+
+function categorizeToken(token: string): TokenCategory {
+  if (/^[a-z]$/.test(token)) return 'letter';
+  if (/^[0-9]$/.test(token)) return 'number';
+  if (/^f([1-9]|1[0-2])$/.test(token)) return 'fn';
+  if (SPECIAL_TOKENS.has(token)) return 'special';
+  if (MOD_TOKENS.has(token)) return 'mod';
+  if (NAV_TOKENS.has(token)) return 'nav';
+  if (MEDIA_TOKENS.has(token)) return 'media';
+  return 'special';
+}
+
+/**
+ * Token picker — replaces the native `<Select>` over `KEYCODES`.
+ *
+ * Click the button to open a popover with a search box, category filter, and
+ * a grid of buttons (mirrors the `KeycodePicker` interaction). Selecting a
+ * token closes the popover and commits the value.
+ */
+function TokenPicker({
   value,
   onChange,
 }: {
   value: string;
   onChange: (t: string) => void;
 }) {
+  const { isOpen, onOpen, onClose, onToggle } = useDisclosure();
+  const initialFocusRef = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState('');
+  const [cat, setCat] = useState<TokenCategory>('all');
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return KEYCODES.filter((k) => {
+      if (cat !== 'all' && categorizeToken(k.token) !== cat) return false;
+      if (!q) return true;
+      return (
+        k.token.toLowerCase().includes(q) ||
+        k.label.toLowerCase().includes(q)
+      );
+    });
+  }, [query, cat]);
+
+  function pick(t: string) {
+    onChange(t);
+    setQuery('');
+    onClose();
+  }
+
+  const label = tokenToLabel(value);
+
   return (
-    <Select
-      size="xs"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      fontFamily="mono"
+    <Popover
+      isOpen={isOpen}
+      onOpen={onOpen}
+      onClose={onClose}
+      placement="bottom-start"
+      initialFocusRef={initialFocusRef}
+      isLazy
+      gutter={4}
     >
-      {KEYCODES.map((k) => (
-        <option key={k.token} value={k.token}>
-          {k.label}
-        </option>
-      ))}
-    </Select>
+      <PopoverTrigger>
+        <Box
+          as="button"
+          type="button"
+          onClick={onToggle}
+          w="100%"
+          px={2}
+          h="24px"
+          borderRadius="sm"
+          border="1px solid"
+          borderColor={isOpen ? 'kanata.fg' : 'border.muted'}
+          bg={isOpen ? 'kanata.subtle' : 'bg.subtle'}
+          color={isOpen ? 'kanata.fg' : 'text.primary'}
+          fontFamily="mono"
+          fontSize="xs"
+          textAlign="left"
+          display="flex"
+          alignItems="center"
+          justifyContent="space-between"
+          transition="border-color 0.12s ease, background-color 0.12s ease, color 0.12s ease"
+          _hover={{ borderColor: isOpen ? 'kanata.fg' : 'border.strong' }}
+          aria-label={`Token: ${label}. Click to change.`}
+          aria-expanded={isOpen}
+        >
+          <Text as="span" noOfLines={1}>{label}</Text>
+          <ChevronDown size={12} />
+        </Box>
+      </PopoverTrigger>
+      <PopoverContent
+        w="320px"
+        bg="bg.surface"
+        borderColor="border.subtle"
+        boxShadow="lg"
+        _focus={{ outline: 'none', boxShadow: 'lg' }}
+      >
+        <PopoverArrow bg="bg.surface" />
+        <PopoverBody p={2.5}>
+          <VStack align="stretch" spacing={2}>
+            <InputGroup size="sm">
+              <InputLeftElement pointerEvents="none" color="text.muted">
+                <Search size={12} />
+              </InputLeftElement>
+              <Input
+                ref={initialFocusRef}
+                placeholder="Search keys…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                variant="filled"
+                fontFamily="mono"
+                fontSize="xs"
+              />
+            </InputGroup>
+
+            <HStack spacing={1} flexWrap="wrap">
+              {TOKEN_CATEGORY_ORDER.map((c) => {
+                const active = cat === c;
+                return (
+                  <Box
+                    key={c}
+                    as="button"
+                    onClick={() => setCat(c)}
+                    px={2}
+                    py={0.5}
+                    borderRadius="sm"
+                    fontSize="9px"
+                    fontWeight={500}
+                    textTransform="uppercase"
+                    letterSpacing="0.06em"
+                    fontFamily="mono"
+                    bg={active ? 'kanata.subtle' : 'transparent'}
+                    color={active ? 'kanata.fg' : 'text.muted'}
+                    border="1px solid"
+                    borderColor={active ? 'kanata.border' : 'border.subtle'}
+                    transition="background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease"
+                    _hover={{
+                      color: active ? 'kanata.fg' : 'text.primary',
+                    }}
+                  >
+                    {TOKEN_CATEGORY_LABELS[c]}
+                  </Box>
+                );
+              })}
+            </HStack>
+
+            <Box maxH="220px" overflowY="auto" pr={1} mx={-1} px={1}>
+              {filtered.length === 0 ? (
+                <Flex
+                  align="center"
+                  justify="center"
+                  h="80px"
+                  color="text.muted"
+                  fontSize="xs"
+                  fontFamily="mono"
+                >
+                  no matches
+                </Flex>
+              ) : (
+                <SimpleGrid columns={4} spacing={1}>
+                  {filtered.map((k) => {
+                    const active = k.token === value;
+                    return (
+                      <Box
+                        key={k.token}
+                        as="button"
+                        onClick={() => pick(k.token)}
+                        h="26px"
+                        px={1}
+                        borderRadius="sm"
+                        bg={active ? 'kanata.subtle' : 'bg.subtle'}
+                        color={active ? 'kanata.fg' : 'text.primary'}
+                        border="1px solid"
+                        borderColor={active ? 'kanata.fg' : 'border.subtle'}
+                        fontFamily="mono"
+                        fontSize="10px"
+                        title={k.token}
+                        transition="background-color 0.1s ease, border-color 0.1s ease, color 0.1s ease"
+                        _hover={{
+                          bg: active ? 'kanata.subtle' : 'bg.elevated',
+                          borderColor: active ? 'kanata.fg' : 'border.strong',
+                        }}
+                      >
+                        {k.label}
+                      </Box>
+                    );
+                  })}
+                </SimpleGrid>
+              )}
+            </Box>
+
+            <Text fontSize="9px" color="text.muted" fontFamily="mono">
+              {filtered.length} of {KEYCODES.length} keys
+            </Text>
+          </VStack>
+        </PopoverBody>
+      </PopoverContent>
+    </Popover>
   );
 }
 

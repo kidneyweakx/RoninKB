@@ -5,8 +5,17 @@ import { mode, type StyleFunctionProps } from '@chakra-ui/theme-tools';
  * RoninKB theme — opinionated, Linear/Raycast/Vercel-inspired.
  *
  * Dark mode is the canonical experience. Light mode is supported but
- * secondary. The palette is deliberately restrained: near-black surfaces,
- * zinc-family grays, and a single violet accent.
+ * secondary. The palette is restrained but multi-accent:
+ *
+ *   - Surfaces: cool slate-blue near-black ("futuristic terminal", not "void").
+ *   - accent.* (violet)   — brand identity, focus rings, profile-active dot.
+ *   - kanata.*  (cyan-teal) — software/runtime overlay layer.
+ *   - hardware.* (amber)    — durable EEPROM bindings (weighty/permanent).
+ *   - wireless.* (sapphire) — Bluetooth/wireless dimension.
+ *
+ * Hue separation: kanata 187°, wireless 217° (30° gap, minimum perceptual
+ * distinguishability), hardware 38-43° (clearly warm), violet 262°. All four
+ * accents pass WCAG AA on bg.primary in both color modes.
  */
 
 const config: ThemeConfig = {
@@ -16,31 +25,66 @@ const config: ThemeConfig = {
 
 const semanticTokens = {
   colors: {
-    // Backgrounds
-    'bg.primary': { default: '#FAFAFA', _dark: '#0A0A0B' },
-    'bg.surface': { default: '#FFFFFF', _dark: '#131316' },
-    'bg.elevated': { default: '#FFFFFF', _dark: '#1C1C21' },
-    'bg.subtle': { default: '#F4F4F5', _dark: '#232328' },
+    // Backgrounds — slate-blue undertone (R<G<B by ~3-6) for cool "terminal" feel
+    'bg.primary': { default: '#FAFAFA', _dark: '#0B0C10' },
+    'bg.surface': { default: '#FFFFFF', _dark: '#14151B' },
+    'bg.elevated': { default: '#FFFFFF', _dark: '#1B1D26' },
+    'bg.subtle': { default: '#F4F4F5', _dark: '#23252E' },
 
-    // Borders
-    'border.subtle': { default: '#E4E4E7', _dark: '#2A2A30' },
-    'border.muted': { default: '#D4D4D8', _dark: '#34343C' },
-    'border.strong': { default: '#A1A1AA', _dark: '#4A4A55' },
+    // Borders — cool gray, gently lifted off the bg.* tones
+    'border.subtle': { default: '#E4E4E7', _dark: '#2C2E38' },
+    'border.muted': { default: '#D4D4D8', _dark: '#373945' },
+    'border.strong': { default: '#A1A1AA', _dark: '#4D4F5C' },
 
-    // Text
-    'text.primary': { default: '#18181B', _dark: '#F5F5F7' },
-    'text.secondary': { default: '#3F3F46', _dark: '#A1A1AA' },
-    'text.muted': { default: '#71717A', _dark: '#71717A' },
-    'text.disabled': { default: '#A1A1AA', _dark: '#52525B' },
+    // Text — softened off-white for less glare against new bg.primary
+    'text.primary': { default: '#18181B', _dark: '#EDEEF2' },
+    'text.secondary': { default: '#3F3F46', _dark: '#A4A6B0' },
+    'text.muted': { default: '#71717A', _dark: '#71747F' },
+    'text.disabled': { default: '#A1A1AA', _dark: '#52545E' },
 
-    // Accent — violet-600, signature color
-    'accent.primary': { default: '#7C3AED', _dark: '#7C3AED' },
-    'accent.hover': { default: '#8B5CF6', _dark: '#8B5CF6' },
+    // Accent — violet, brand identity. Slightly desaturated in dark.
+    'accent.primary': { default: '#7C3AED', _dark: '#8B5CF6' },
+    'accent.hover': { default: '#8B5CF6', _dark: '#A78BFA' },
     'accent.subtle': {
       default: 'rgba(124, 58, 237, 0.10)',
-      _dark: 'rgba(124, 58, 237, 0.15)',
+      _dark: 'rgba(139, 92, 246, 0.14)',
     },
     'accent.fg': { default: '#FFFFFF', _dark: '#FFFFFF' },
+
+    // Kanata — cyan-teal (hue ~187). Software/runtime overlay layer.
+    'kanata.fg': { default: '#0891B2', _dark: '#67E8F9' },
+    'kanata.bg': { default: '#0E7490', _dark: '#22D3EE' },
+    'kanata.subtle': {
+      default: 'rgba(8, 145, 178, 0.10)',
+      _dark: 'rgba(34, 211, 238, 0.10)',
+    },
+    'kanata.border': {
+      default: 'rgba(8, 145, 178, 0.30)',
+      _dark: 'rgba(34, 211, 238, 0.28)',
+    },
+
+    // Hardware — amber (hue ~40). Durable EEPROM bindings, weighty/permanent.
+    'hardware.fg': { default: '#B45309', _dark: '#FBBF24' },
+    'hardware.bg': { default: '#D97706', _dark: '#F59E0B' },
+    'hardware.subtle': {
+      default: 'rgba(180, 83, 9, 0.10)',
+      _dark: 'rgba(251, 191, 36, 0.10)',
+    },
+    'hardware.border': {
+      default: 'rgba(180, 83, 9, 0.30)',
+      _dark: 'rgba(251, 191, 36, 0.26)',
+    },
+
+    // Wireless — sapphire blue (hue ~217). BT/wireless dimension.
+    'wireless.fg': { default: '#1D4ED8', _dark: '#60A5FA' },
+    'wireless.subtle': {
+      default: 'rgba(29, 78, 216, 0.10)',
+      _dark: 'rgba(96, 165, 250, 0.12)',
+    },
+    'wireless.border': {
+      default: 'rgba(29, 78, 216, 0.30)',
+      _dark: 'rgba(96, 165, 250, 0.28)',
+    },
 
     // Status
     success: { default: '#059669', _dark: '#10B981' },
@@ -81,8 +125,8 @@ const shadows = {
   subtle: '0 1px 2px rgba(0,0,0,0.05), 0 2px 4px rgba(0,0,0,0.04)',
   card: '0 1px 3px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04)',
   elevated: '0 4px 20px rgba(0,0,0,0.08), 0 1px 3px rgba(0,0,0,0.04)',
-  glow: '0 0 0 1px rgba(124, 58, 237, 0.3), 0 4px 16px rgba(124, 58, 237, 0.2)',
-  focus: '0 0 0 2px rgba(124, 58, 237, 0.4)',
+  glow: '0 0 0 1px rgba(139, 92, 246, 0.32), 0 4px 16px rgba(139, 92, 246, 0.22)',
+  focus: '0 0 0 2px rgba(139, 92, 246, 0.42)',
 };
 
 const styles = {
@@ -95,10 +139,11 @@ const styles = {
       MozOsxFontSmoothing: 'grayscale',
     },
     body: {
-      // Subtle radial gradient + noise feel via layered bg.
+      // Multi-stop futuristic glow: violet at top, faint cyan at lower-right.
+      // Light mode keeps it whisper-quiet so cards stay clean.
       backgroundImage: mode(
-        'radial-gradient(ellipse at top, rgba(124, 58, 237, 0.04), transparent 60%)',
-        'radial-gradient(ellipse at top, rgba(124, 58, 237, 0.08), transparent 55%)',
+        'radial-gradient(ellipse at 50% 0%, rgba(124, 58, 237, 0.05), transparent 60%), radial-gradient(ellipse at 100% 100%, rgba(34, 211, 238, 0.03), transparent 55%)',
+        'radial-gradient(ellipse at 50% 0%, rgba(139, 92, 246, 0.10), transparent 55%), radial-gradient(ellipse at 100% 100%, rgba(34, 211, 238, 0.05), transparent 50%)',
       )(props),
       backgroundAttachment: 'fixed',
     },
@@ -106,7 +151,7 @@ const styles = {
       borderColor: 'border.subtle',
     },
     '*::selection': {
-      backgroundColor: 'rgba(124, 58, 237, 0.35)',
+      backgroundColor: 'rgba(139, 92, 246, 0.35)',
       color: 'text.primary',
     },
     // Reduced-motion respect
@@ -120,15 +165,15 @@ const styles = {
     '::-webkit-scrollbar': { width: '10px', height: '10px' },
     '::-webkit-scrollbar-track': { background: 'transparent' },
     '::-webkit-scrollbar-thumb': {
-      background: mode('#D4D4D8', '#2A2A30')(props),
+      background: mode('#D4D4D8', '#2C2E38')(props),
       borderRadius: '8px',
       border: mode(
         '2px solid #FAFAFA',
-        '2px solid #0A0A0B',
+        '2px solid #0B0C10',
       )(props),
     },
     '::-webkit-scrollbar-thumb:hover': {
-      background: mode('#A1A1AA', '#4A4A55')(props),
+      background: mode('#A1A1AA', '#4D4F5C')(props),
     },
   }),
 };
