@@ -6,7 +6,7 @@ class Roninkb < Formula
 
   on_macos do
     url "https://github.com/kidneyweakx/RoninKB/releases/download/v#{version}/roninKB-v#{version}-universal-apple-darwin.tar.gz"
-    sha256 "71d5e8f0bafccd9eef3ab40d3555a9528352296b576ede9aba4b8e302ebe1266"
+    sha256 "a2a3acdfb0443ff5bda45ca20dfa9e61cbc8eea99fbe73de654a9526316b5616"
   end
 
   on_linux do
@@ -14,7 +14,7 @@ class Roninkb < Formula
     # and we bundle kanata. Linux ARM users can build from source.
     on_intel do
       url "https://github.com/kidneyweakx/RoninKB/releases/download/v#{version}/roninKB-v#{version}-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "59779a136352bce209b9ceecbbeaa1b9ea6dc5e7a7bf4ac505374af81ff9d29e"
+      sha256 "e2924a77094a8143c47fcda1974b6bdd6ec7384c42acb87837a6794b0f861822"
     end
   end
 
