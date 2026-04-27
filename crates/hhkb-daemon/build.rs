@@ -71,9 +71,17 @@ fn bundle_kanata() {
     } else if target.contains("x86_64-unknown-linux") {
         ("linux-binaries-x64.zip", "kanata_linux_x64")
     } else if target.contains("x86_64-pc-windows") {
-        ("windows-binaries-x64.zip", "kanata_windows_x64.exe")
-    } else if target.contains("aarch64-pc-windows") {
-        ("windows-binaries-arm64.zip", "kanata_windows_arm64.exe")
+        // kanata's Windows zip ships 8 variants. We want TTY (no GUI tray)
+        // because the daemon spawns kanata as a child and pipes stderr;
+        // winIOv2 (Windows IOCTL v2) is the user-mode hook that doesn't
+        // require installing the Wintercept kernel driver, so users get a
+        // working install with no extra steps. Skip the `_cmd_allowed_`
+        // build — kanata's `cmd` action is a shell-exec primitive we don't
+        // want enabled by default.
+        (
+            "windows-binaries-x64.zip",
+            "kanata_windows_tty_winIOv2_x64.exe",
+        )
     } else {
         panic!(
             "bundled-kanata: target {target} is not yet supported.\n\
