@@ -1,6 +1,6 @@
 [package]
 name = "hhkb-core"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Core library for HHKB keyboard HID communication, keymap manipulation, and profile management"
 license = "MIT"

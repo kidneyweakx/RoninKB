@@ -52,6 +52,9 @@ pub enum ApiError {
     #[error("kanata device unavailable: {0}")]
     KanataDeviceUnavailable(String),
 
+    #[error("kanata driver not activated: {0}")]
+    KanataDriverMissing(String),
+
     // -- Flow (cross-device clipboard sync) --------------------------------
     #[error("Flow error: {0}")]
     Flow(#[from] crate::flow::FlowError),
@@ -92,6 +95,9 @@ impl IntoResponse for ApiError {
             ),
             ApiError::KanataDeviceUnavailable(_) => {
                 (StatusCode::SERVICE_UNAVAILABLE, "kanata_device_unavailable")
+            }
+            ApiError::KanataDriverMissing(_) => {
+                (StatusCode::SERVICE_UNAVAILABLE, "kanata_driver_missing")
             }
             ApiError::Flow(e) => match e {
                 crate::flow::FlowError::Disabled => {

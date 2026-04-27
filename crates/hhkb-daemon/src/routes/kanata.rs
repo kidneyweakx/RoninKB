@@ -16,6 +16,11 @@ pub struct StatusResponse {
     pub binary_path: Option<String>,
     pub config_path: String,
     pub input_monitoring_granted: Option<bool>,
+    /// macOS-only: `Some(true)` if the Karabiner DriverKit sysext is
+    /// `[activated enabled]`. `Some(false)` means it's missing or stuck in
+    /// `waiting for user`. `None` on other platforms or when the check
+    /// couldn't run.
+    pub driver_activated: Option<bool>,
     pub last_error: Option<String>,
     pub stderr_tail: Vec<String>,
     pub device_path: Option<String>,
@@ -63,6 +68,7 @@ pub async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
         config_path,
         binary_path,
         input_monitoring_granted,
+        driver_activated,
         last_error,
         stderr_tail,
         device_path,
@@ -74,6 +80,7 @@ pub async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
             kanata.config_path().to_path_buf(),
             kanata.binary_path().map(|p| p.display().to_string()),
             kanata.input_monitoring_granted(),
+            kanata.driver_activated(),
             kanata.last_error(),
             kanata.stderr_tail(20),
             kanata.last_device_path(),
@@ -86,6 +93,7 @@ pub async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
         Default::default(),
         None,
         None,
+        None,
         Some("failed to read kanata status".to_string()),
         vec![],
         None,
@@ -96,6 +104,7 @@ pub async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
         binary_path,
         config_path: config_path.display().to_string(),
         input_monitoring_granted,
+        driver_activated,
         last_error,
         stderr_tail,
         device_path,

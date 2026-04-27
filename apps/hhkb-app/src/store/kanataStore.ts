@@ -18,6 +18,12 @@ interface KanataState {
   binaryPath: string | null;
   configPath: string | null;
   inputMonitoringGranted: boolean | null;
+  /**
+   * macOS-only Karabiner DriverKit sysext activation state. `false` means the
+   * user still has to approve the sysext in System Settings before kanata can
+   * grab keys; UI should render a setup wizard rather than spamming start().
+   */
+  driverActivated: boolean | null;
   devicePath: string | null;
   stderrTail: string[];
   loading: boolean;
@@ -39,6 +45,7 @@ export const useKanataStore = create<KanataState>((set, get) => ({
   binaryPath: null,
   configPath: null,
   inputMonitoringGranted: null,
+  driverActivated: null,
   devicePath: null,
   stderrTail: [],
   loading: false,
@@ -61,6 +68,7 @@ export const useKanataStore = create<KanataState>((set, get) => ({
         binaryPath: raw.binaryPath ?? null,
         configPath: raw.path ?? null,
         inputMonitoringGranted: raw.inputMonitoringGranted ?? null,
+        driverActivated: raw.driverActivated ?? null,
         devicePath: raw.devicePath ?? null,
         stderrTail: raw.stderrTail ?? [],
         error: raw.lastError ?? null,

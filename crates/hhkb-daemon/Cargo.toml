@@ -1,6 +1,6 @@
 [package]
 name = "hhkb-daemon"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "RoninKB background daemon: HTTP+WS API for HHKB keyboard control"
 license = "MIT"

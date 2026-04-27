@@ -368,6 +368,7 @@ export class DaemonClient {
       state?: string;
       pid?: number;
       input_monitoring_granted?: boolean | null;
+      driver_activated?: boolean | null;
       last_error?: string | null;
       stderr_tail?: string[];
       device_path?: string | null;
@@ -379,6 +380,7 @@ export class DaemonClient {
       state: raw.state,
       pid: raw.pid,
       inputMonitoringGranted: raw.input_monitoring_granted ?? null,
+      driverActivated: raw.driver_activated ?? null,
       lastError: raw.last_error ?? null,
       stderrTail: raw.stderr_tail ?? [],
       devicePath: raw.device_path ?? null,
@@ -514,6 +516,13 @@ export interface KanataStatus {
   state?: string;
   pid?: number;
   inputMonitoringGranted?: boolean | null;
+  /**
+   * macOS-only. `true` when Karabiner-DriverKit-VirtualHIDDevice is
+   * `[activated enabled]`. `false` means the user still has to approve the
+   * sysext in System Settings. `null` on other platforms or when the daemon
+   * couldn't determine the state.
+   */
+  driverActivated?: boolean | null;
   lastError?: string | null;
   stderrTail?: string[];
   devicePath?: string | null;

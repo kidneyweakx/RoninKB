@@ -292,6 +292,24 @@ impl KanataManager {
             .clone()
     }
 
+    /// macOS Karabiner-DriverKit-VirtualHIDDevice activation status.
+    ///
+    /// Returns `Some(true)` if the system extension is `[activated enabled]`,
+    /// `Some(false)` if it's missing or stuck in `[activated waiting for user]`,
+    /// and `None` on non-macOS targets or when `systemextensionsctl` cannot be
+    /// reached. Cheap to call (one short-lived child process per call); the
+    /// status handler invokes it on every poll.
+    pub fn driver_activated(&self) -> Option<bool> {
+        #[cfg(target_os = "macos")]
+        {
+            macos_driver_activated()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+    }
+
     /// macOS Input Monitoring / Accessibility preflight status.
     pub fn input_monitoring_granted(&self) -> Option<bool> {
         #[cfg(target_os = "macos")]
@@ -358,6 +376,21 @@ impl KanataManager {
             .binary_path
             .as_ref()
             .ok_or(ApiError::KanataNotInstalled)?;
+
+        // macOS preflight: kanata can't open the virtual HID device unless the
+        // Karabiner-DriverKit-VirtualHIDDevice system extension is activated.
+        // Surface this as a structured error so the UI can show a setup wizard
+        // instead of silently spamming spawn-fail-respawn.
+        #[cfg(target_os = "macos")]
+        if let Some(false) = macos_driver_activated() {
+            let msg = "Karabiner-DriverKit-VirtualHIDDevice is not activated. \
+                       Open /Applications/Karabiner-Elements.app once and approve \
+                       the system extension prompt in System Settings → Privacy \
+                       & Security → Login Items & Extensions → Driver Extensions."
+                .to_string();
+            self.set_last_error(Some(msg.clone()));
+            return Err(ApiError::KanataDriverMissing(msg));
+        }
 
         // NOTE: we deliberately do NOT call `macos_input_monitoring_granted()`
         // here. That preflight runs in the daemon process, but the binary
@@ -671,6 +704,38 @@ fn detect_linux_device_path() -> Option<PathBuf> {
 fn macos_input_monitoring_granted() -> bool {
     // SAFETY: pure preflight API, no ownership crossing.
     unsafe { cg_preflight_listen_event_access() }
+}
+
+/// Parse `systemextensionsctl list` for the Karabiner DriverKit driver. We
+/// look for the bundle id and confirm the trailing `[state]` is exactly
+/// `[activated enabled]` — anything else (e.g. `[activated waiting for user]`,
+/// `[terminated waiting for user]`) means the user still has to approve the
+/// sysext in System Settings before kanata can grab the keyboard.
+///
+/// Returns `None` when the command itself can't run (PATH issue, missing
+/// binary on a stripped-down install). The caller should treat `None` as
+/// "couldn't determine" — let kanata try and surface whatever error it
+/// reports rather than blocking the user on a heuristic.
+#[cfg(target_os = "macos")]
+fn macos_driver_activated() -> Option<bool> {
+    const BUNDLE_ID: &str = "org.pqrs.Karabiner-DriverKit-VirtualHIDDevice";
+    let output = Command::new("systemextensionsctl")
+        .arg("list")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    // Different macOS versions print the driver-extension category to either
+    // stdout or stderr; check both so we never miss the line.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for line in stdout.lines().chain(stderr.lines()) {
+        if line.contains(BUNDLE_ID) {
+            return Some(line.contains("[activated enabled]"));
+        }
+    }
+    Some(false)
 }
 
 #[cfg(target_os = "macos")]

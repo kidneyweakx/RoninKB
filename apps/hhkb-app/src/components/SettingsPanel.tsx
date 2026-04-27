@@ -94,6 +94,7 @@ export function SettingsPanel({ isOpen, onClose }: Props) {
   const kanataLoading = useKanataStore((s) => s.loading);
   const kanataPath = useKanataStore((s) => s.configPath);
   const kanataInputMonitoring = useKanataStore((s) => s.inputMonitoringGranted);
+  const kanataDriverActivated = useKanataStore((s) => s.driverActivated);
   const kanataDevicePath = useKanataStore((s) => s.devicePath);
   const kanataStderrTail = useKanataStore((s) => s.stderrTail);
   const kanataError = useKanataStore((s) => s.error);
@@ -372,6 +373,25 @@ export function SettingsPanel({ isOpen, onClose }: Props) {
                       color={kanataInputMonitoring ? 'success' : 'warning'}
                     >
                       {kanataInputMonitoring ? 'granted' : 'required'}
+                    </Text>
+                  </SettingsRow>
+                )}
+
+                {kanataDriverActivated !== null && (
+                  <SettingsRow
+                    label="Driver extension"
+                    description={
+                      kanataDriverActivated
+                        ? undefined
+                        : 'Open Karabiner-Elements once and approve the sysext prompt'
+                    }
+                  >
+                    <Text
+                      fontSize="10px"
+                      fontFamily="mono"
+                      color={kanataDriverActivated ? 'success' : 'warning'}
+                    >
+                      {kanataDriverActivated ? 'activated' : 'not activated'}
                     </Text>
                   </SettingsRow>
                 )}
