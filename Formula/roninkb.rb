@@ -6,17 +6,17 @@ class Roninkb < Formula
 
   on_macos do
     url "https://github.com/kidneyweakx/RoninKB/releases/download/v#{version}/roninKB-v#{version}-universal-apple-darwin.tar.gz"
-    sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+    sha256 "71d5e8f0bafccd9eef3ab40d3555a9528352296b576ede9aba4b8e302ebe1266"
   end
 
   on_linux do
     on_intel do
       url "https://github.com/kidneyweakx/RoninKB/releases/download/v#{version}/roninKB-v#{version}-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+      sha256 "59779a136352bce209b9ceecbbeaa1b9ea6dc5e7a7bf4ac505374af81ff9d29e"
     end
     on_arm do
       url "https://github.com/kidneyweakx/RoninKB/releases/download/v#{version}/roninKB-v#{version}-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+      sha256 "925ef7a2ae75af0510bdd8bd0f00157c5a73bf0bcbdef59d6d29307da632759f"
     end
   end
 

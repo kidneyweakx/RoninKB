@@ -369,7 +369,6 @@ jobs:
               out.append(line)
               nxt_idx = i + 1
               def bump(sha):
-                  nonlocal out
                   if nxt_idx < len(lines):
                       out.append(re.sub(r'sha256 "[^"]*"',
                                         f'sha256 "{sha}"',
