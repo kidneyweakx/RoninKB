@@ -10,13 +10,11 @@ class Roninkb < Formula
   end
 
   on_linux do
+    # Linux aarch64 not shipped: kanata upstream has no arm64 Linux binary
+    # and we bundle kanata. Linux ARM users can build from source.
     on_intel do
       url "https://github.com/kidneyweakx/RoninKB/releases/download/v#{version}/roninKB-v#{version}-x86_64-unknown-linux-gnu.tar.gz"
       sha256 "59779a136352bce209b9ceecbbeaa1b9ea6dc5e7a7bf4ac505374af81ff9d29e"
-    end
-    on_arm do
-      url "https://github.com/kidneyweakx/RoninKB/releases/download/v#{version}/roninKB-v#{version}-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "925ef7a2ae75af0510bdd8bd0f00157c5a73bf0bcbdef59d6d29307da632759f"
     end
   end
 

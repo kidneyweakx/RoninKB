@@ -15,7 +15,15 @@ case "$OS" in
   linux)
     case "$ARCH" in
       x86_64|amd64) target="x86_64-unknown-linux-gnu" ;;
-      aarch64|arm64) target="aarch64-unknown-linux-gnu" ;;
+      aarch64|arm64)
+        echo "Linux aarch64 release binaries are not published — kanata"
+        echo "upstream does not ship that arch and our daemon bundles it."
+        echo "Build from source instead:"
+        echo "  git clone https://github.com/kidneyweakx/RoninKB"
+        echo "  cd RoninKB && cargo build --release -p hhkb-cli -p hhkb-daemon \\"
+        echo "    --features hhkb-core/hidapi-backend"
+        exit 1
+        ;;
       *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
     esac
     ;;
