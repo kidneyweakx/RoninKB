@@ -271,7 +271,7 @@ fn parse_macos_connected_devices(stdout: &[u8]) -> Result<Vec<SystemBluetoothDev
         }
     }
 
-    devices.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    devices.sort_by_key(|d| d.name.to_lowercase());
     Ok(devices)
 }
 
