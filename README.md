@@ -97,6 +97,17 @@ See [`RELEASING.md`](RELEASING.md). TL;DR: bump versions, push a `v*.*.*`
 tag, and the release workflow builds binaries, publishes a GitHub Release,
 and refreshes the Homebrew formula.
 
+## Acknowledgements
+
+RoninKB ships and invokes [kanata](https://github.com/jtroo/kanata) for its
+software-binding layer. kanata is licensed under
+[LGPL-3.0](THIRD_PARTY_LICENSES/kanata-LICENSE.txt) and is included
+unmodified — see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for the
+full attribution and how RoninKB satisfies the LGPL obligations.
+
 ## License
 
 MIT. See [`LICENSE`](LICENSE).
+
+Third-party components retain their own licenses — see
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

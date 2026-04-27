@@ -34,6 +34,13 @@ use crate::error::ApiError;
 #[cfg(feature = "bundled-kanata")]
 static BUNDLED_KANATA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/kanata-bundle"));
 
+/// Verbatim LGPL-3.0 license text for the bundled kanata binary. Written
+/// to disk next to the extracted binary so the redistributed artefact
+/// travels with its license, satisfying LGPL-3.0 §4(b).
+#[cfg(feature = "bundled-kanata")]
+static BUNDLED_KANATA_LICENSE: &[u8] =
+    include_bytes!("../../../THIRD_PARTY_LICENSES/kanata-LICENSE.txt");
+
 /// Extract the bundled kanata binary to a discoverable location and return
 /// its path. Re-extracts only when the on-disk size differs (i.e. the
 /// daemon was rebuilt with a newer bundled version).
@@ -97,6 +104,22 @@ fn extract_bundled_kanata() -> Option<PathBuf> {
             tracing::info!(path = %info_plist_path.display(), "wrote kanata Info.plist");
         }
         cleanup_legacy_kanata_extraction();
+    }
+
+    // Drop the LGPL-3.0 license next to the binary so the redistributed
+    // artefact travels with its license. Best-effort — we never want a
+    // missing-LICENSE write to abort kanata startup, but we log it.
+    let license_path = path.with_file_name("kanata-LICENSE.txt");
+    let needs_license = std::fs::metadata(&license_path)
+        .map(|m| m.len() != BUNDLED_KANATA_LICENSE.len() as u64)
+        .unwrap_or(true);
+    if needs_license {
+        match std::fs::write(&license_path, BUNDLED_KANATA_LICENSE) {
+            Ok(()) => tracing::info!(path = %license_path.display(), "wrote kanata LICENSE"),
+            Err(e) => {
+                tracing::warn!(path = %license_path.display(), error = %e, "could not write kanata LICENSE")
+            }
+        }
     }
 
     Some(path)

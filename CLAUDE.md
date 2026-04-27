@@ -94,3 +94,27 @@ cargo run -p hhkb-daemon
 - Don't put platform-specific code in `hhkb-core`. Core stays portable; OS bits live in `hhkb-daemon` (with `cfg` gates).
 - Don't widen the `firmware-write` / `embedded-ui` feature scopes without a CI matrix update.
 - Don't rename color tokens without grepping every component first.
+
+## Third-party licenses (kanata is LGPL-3.0)
+
+RoninKB itself is MIT, but the `bundled-kanata` feature ships a kanata
+release binary which is **LGPL-3.0**. The whole project stays MIT — see
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for why and what
+obligations are satisfied.
+
+**Hard rules — don't break the LGPL compliance posture:**
+
+- **Don't modify kanata source** inside this repo. `build.rs` downloads an
+  unmodified upstream release; keep it that way. If you need a kanata fork,
+  host it separately and adjust `KANATA_VERSION` (or the URL) in
+  `crates/hhkb-daemon/build.rs`.
+- **Don't statically link kanata as a library.** It must stay a separate
+  child process invoked from `kanata.rs`. Linking kanata as a library would
+  flip the LGPL combined-work analysis and likely require RoninKB to
+  publish under LGPL.
+- **Don't delete `THIRD_PARTY_LICENSES/kanata-LICENSE.txt`.** `kanata.rs`
+  uses `include_bytes!` on it (when `bundled-kanata` is on) so the LICENSE
+  ships next to the extracted binary. Removing or renaming the file breaks
+  the compile.
+- **Don't drop the kanata attribution** from `README.md` or
+  `THIRD_PARTY_NOTICES.md`.
