@@ -146,7 +146,9 @@ pub async fn reveal(State(state): State<AppState>) -> ApiResult<Json<RevealRespo
         .ok_or(ApiError::KanataNotInstalled)?;
 
     // On macOS the binary lives at `<bundle>.app/Contents/MacOS/kanata`. We
-    // reveal the enclosing `.app` so Finder shows it as a single icon.
+    // reveal the enclosing `.app` so Finder shows it as a single icon. Linux
+    // doesn't use this — it just opens the parent directory.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let reveal_target = bundle_root_for(&path).unwrap_or_else(|| path.clone());
 
     #[cfg(target_os = "macos")]

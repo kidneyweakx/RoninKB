@@ -224,34 +224,38 @@ impl FlowManager {
 
         #[cfg(target_os = "macos")]
         {
-            let mgr = self.clone();
-            let clipboard_task = tokio::spawn(async move {
-                let mut last = String::new();
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                    // Stop if flow was disabled.
-                    if !mgr.config.read().await.enabled {
-                        break;
+            // Skip clipboard polling under tests — the spawned task would
+            // outlive the per-test runtime and `pbpaste` on a CI runner
+            // sandbox can wedge for tens of seconds, hanging the suite.
+            if !cfg!(test) {
+                let mgr = self.clone();
+                let clipboard_task = tokio::spawn(async move {
+                    let mut last = String::new();
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        // Stop if flow was disabled.
+                        if !mgr.config.read().await.enabled {
+                            break;
+                        }
+                        // Run pbpaste to get current clipboard contents.
+                        let Ok(out) = tokio::process::Command::new("pbpaste").output().await else {
+                            continue;
+                        };
+                        if !out.status.success() {
+                            continue;
+                        }
+                        let content = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                        if content.is_empty() || content == last {
+                            continue;
+                        }
+                        last = content.clone();
+                        let _ = mgr.sync_local(content).await;
                     }
-                    // Run pbpaste to get current clipboard contents.
-                    let Ok(out) = tokio::process::Command::new("pbpaste").output().await else {
-                        continue;
-                    };
-                    if !out.status.success() {
-                        continue;
-                    }
-                    let content = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                    if content.is_empty() || content == last {
-                        continue;
-                    }
-                    last = content.clone();
-                    let _ = mgr.sync_local(content).await;
+                });
+                // Reuse the guard we already hold — re-locking would deadlock.
+                if let Some(h) = handle_guard.as_mut() {
+                    h.clipboard_task = Some(clipboard_task);
                 }
-            });
-            // Attach the clipboard task to the existing MdnsHandle.
-            let mut hg = self.mdns_handle.write().await;
-            if let Some(h) = hg.as_mut() {
-                h.clipboard_task = Some(clipboard_task);
             }
         }
 
