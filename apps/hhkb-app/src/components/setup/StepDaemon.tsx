@@ -158,7 +158,7 @@ export function StepDaemon() {
               {commands.length === 0 ? (
                 <Text fontSize="xs" color="text.muted">
                   Platform not auto-detected. See
-                  github.com/roninKB/roninKB for manual steps.
+                  github.com/kidneyweakx/RoninKB for manual steps.
                 </Text>
               ) : (
                 <VStack align="stretch" spacing={3}>

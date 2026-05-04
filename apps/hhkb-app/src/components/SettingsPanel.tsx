@@ -483,7 +483,7 @@ export function SettingsPanel({ isOpen, onClose }: Props) {
                 </Text>
                 <Box
                   as="a"
-                  href="https://github.com/roninKB/roninKB"
+                  href="https://github.com/kidneyweakx/RoninKB"
                   target="_blank"
                   rel="noopener noreferrer"
                   display="inline-flex"
@@ -494,7 +494,7 @@ export function SettingsPanel({ isOpen, onClose }: Props) {
                   _hover={{ textDecoration: 'underline' }}
                 >
                   <ExternalLink size={12} />
-                  github.com/roninKB/roninKB
+                  github.com/kidneyweakx/RoninKB
                 </Box>
               </VStack>
             </Box>

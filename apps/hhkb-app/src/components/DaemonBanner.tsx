@@ -42,7 +42,7 @@ export function DaemonBanner() {
             rightIcon={<ExternalLink size={12} />}
             onClick={() => {
               window.open(
-                'https://github.com/roninkb/roninKB/releases',
+                'https://github.com/kidneyweakx/RoninKB/releases',
                 '_blank',
               );
             }}
