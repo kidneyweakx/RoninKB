@@ -85,11 +85,19 @@ impl TrayController {
         let icon_bytes = include_bytes!("../assets/tray-icon.png");
         let icon = tray_icon::Icon::from_rgba(decode_rgba(icon_bytes)?, 32, 32)?;
 
-        let tray = TrayIconBuilder::new()
+        let builder = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_tooltip("RoninKB Daemon")
-            .with_icon(icon)
-            .build()?;
+            .with_icon(icon);
+
+        // On macOS, mark the icon as a template image so AppKit auto-tints
+        // it to match the menu bar text color (white on dark menu bar, black
+        // on light). This is what every well-behaved tray app does — only
+        // the alpha channel matters, color is taken from the system.
+        #[cfg(target_os = "macos")]
+        let builder = builder.with_icon_as_template(true);
+
+        let tray = builder.build()?;
 
         Ok(Self {
             _tray: tray,
