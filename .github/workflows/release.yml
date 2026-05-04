@@ -91,7 +91,7 @@ jobs:
         run: |
           cargo build --release --target ${{ matrix.target }} \
             -p hhkb-cli -p hhkb-daemon \
-            --features hhkb-core/hidapi-backend,hhkb-daemon/embedded-ui,hhkb-daemon/bundled-kanata
+            --features hhkb-core/hidapi-backend,hhkb-daemon/embedded-ui,hhkb-daemon/bundled-kanata,hhkb-daemon/tray
 
       - name: Stage release files (Unix)
         if: runner.os != 'Windows'
