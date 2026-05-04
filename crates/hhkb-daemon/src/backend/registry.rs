@@ -47,9 +47,30 @@ impl BackendRegistry {
     /// user explicitly picks one (or grants permissions and the next
     /// `/backend/list` poll re-picks).
     pub fn new(backends: Vec<Arc<dyn Backend>>) -> Self {
-        let active = backends.iter().find_map(|b| {
-            matches!(b.permission_status(), PermissionStatus::Granted).then(|| b.id())
-        });
+        Self::new_with_pin(backends, None)
+    }
+
+    /// Like [`Self::new`] but honours an optional pin loaded from
+    /// `config.toml` (RFC 0001 §4.4): if `pin` is `Some(id)` and that
+    /// backend is registered, the pin wins regardless of priority order
+    /// (still requires `permission_status() == Granted`; otherwise we
+    /// quietly fall back to the priority pick so a pinned backend that
+    /// lost its permissions doesn't leave the user with `None`).
+    pub fn new_with_pin(backends: Vec<Arc<dyn Backend>>, pin: Option<BackendId>) -> Self {
+        let auto_pick = || {
+            backends.iter().find_map(|b| {
+                matches!(b.permission_status(), PermissionStatus::Granted).then(|| b.id())
+            })
+        };
+        let active = pin
+            .and_then(|id| {
+                backends
+                    .iter()
+                    .find(|b| b.id() == id)
+                    .filter(|b| matches!(b.permission_status(), PermissionStatus::Granted))
+                    .map(|b| b.id())
+            })
+            .or_else(auto_pick);
         Self {
             backends,
             active: Mutex::new(active),
@@ -207,6 +228,60 @@ mod tests {
         let err = r.select(BackendId::MacosNative).unwrap_err();
         assert!(matches!(err, RegistryError::UnknownBackend(_)));
         // Active stays unchanged on failed select.
+        assert_eq!(r.active(), Some(BackendId::Kanata));
+    }
+
+    #[test]
+    fn pin_overrides_priority_when_granted() {
+        // Kanata sits earlier in priority order, but the user pinned
+        // EEPROM — registry should honour the pin.
+        let r = BackendRegistry::new_with_pin(
+            vec![
+                Arc::new(StubBackend {
+                    id: BackendId::Kanata,
+                    granted: true,
+                }),
+                Arc::new(StubBackend {
+                    id: BackendId::Eeprom,
+                    granted: true,
+                }),
+            ],
+            Some(BackendId::Eeprom),
+        );
+        assert_eq!(r.active(), Some(BackendId::Eeprom));
+    }
+
+    #[test]
+    fn pin_falls_back_when_target_lacks_permissions() {
+        // User pinned MacosNative but it lost Input Monitoring; we don't
+        // want to leave them with `None` — fall back to the auto-pick.
+        let r = BackendRegistry::new_with_pin(
+            vec![
+                Arc::new(StubBackend {
+                    id: BackendId::MacosNative,
+                    granted: false,
+                }),
+                Arc::new(StubBackend {
+                    id: BackendId::Eeprom,
+                    granted: true,
+                }),
+            ],
+            Some(BackendId::MacosNative),
+        );
+        assert_eq!(r.active(), Some(BackendId::Eeprom));
+    }
+
+    #[test]
+    fn pin_to_unknown_backend_falls_back_to_priority() {
+        // A stale config.toml referencing a backend we no longer ship
+        // shouldn't crash startup — quietly fall back.
+        let r = BackendRegistry::new_with_pin(
+            vec![Arc::new(StubBackend {
+                id: BackendId::Kanata,
+                granted: true,
+            })],
+            Some(BackendId::Hidutil),
+        );
         assert_eq!(r.active(), Some(BackendId::Kanata));
     }
 

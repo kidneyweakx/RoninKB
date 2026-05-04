@@ -17,8 +17,9 @@ use hhkb_core::transport::HidApiTransport;
 use crate::backend::eeprom::EepromBackend;
 use crate::backend::kanata::KanataBackend;
 use crate::backend::registry::BackendRegistry;
-use crate::backend::Backend;
+use crate::backend::{Backend, BackendId};
 use crate::ble::BleManager;
+use crate::config::DaemonConfig;
 use crate::db;
 use crate::error::{ApiError, ApiResult};
 use crate::flow::FlowManager;
@@ -41,6 +42,11 @@ pub struct AppState {
     /// `/kanata/*` routes keep working unchanged; the `/backend/*` routes
     /// read this registry to expose the unified surface.
     pub backends: Arc<BackendRegistry>,
+    /// Persistent daemon configuration (`config.toml`). Holds the user's
+    /// pinned backend choice and any future global daemon knobs. Wrapped in
+    /// `Arc` so route handlers can clone-and-spawn-blocking without the
+    /// state itself having to be re-locked.
+    pub daemon_config: Arc<DaemonConfig>,
     /// Flow (cross-device clipboard sync) manager. Not enabled by default;
     /// the caller must POST `/flow/enable` to start it.
     pub flow: Arc<FlowManager>,
@@ -97,10 +103,13 @@ impl AppState {
         // frontend connects, already-paired BLE devices are in the cache.
         ble.probe_connected(events.clone());
 
+        let daemon_config = Arc::new(DaemonConfig::load_default());
+
         let device_handle = Arc::new(Mutex::new(device));
         let backends = Arc::new(build_backend_registry(
             Arc::clone(&device_handle),
             Arc::clone(&kanata),
+            daemon_config.pinned_backend(),
         ));
 
         Ok(Self {
@@ -109,6 +118,7 @@ impl AppState {
             events,
             kanata,
             backends,
+            daemon_config,
             flow: Arc::new(FlowManager::new()),
             ble,
             auto_reconnect: true,
@@ -130,16 +140,33 @@ impl AppState {
         ));
         let kanata = Arc::new(KanataManager::with_paths(None, kanata_cfg));
         let device = Arc::new(Mutex::new(None));
+        // Tests get an in-memory config rooted at no path, so set/get works
+        // without writing to disk and without leaking pins between test runs.
+        let daemon_config = Arc::new(DaemonConfig::for_tests(
+            None,
+            crate::config::DaemonConfigFile::default(),
+        ));
+        // Build the registry with kanata as the active backend so the
+        // existing /kanata/* integration tests keep their semantics — the
+        // M4 §82 backend_inactive guard is exercised separately in tests
+        // that explicitly switch the active backend via /backend/select.
         let backends = Arc::new(build_backend_registry(
             Arc::clone(&device),
             Arc::clone(&kanata),
+            daemon_config.pinned_backend(),
         ));
+        // The kanata backend reports Required permissions when its binary
+        // isn't installed (test default), so the auto-pick never lands on
+        // it. Force-select kanata explicitly: registry.select() ignores
+        // permission state — it just records the user's choice.
+        let _ = backends.select(BackendId::Kanata);
         Self {
             device,
             db: Arc::new(Mutex::new(conn)),
             events,
             kanata,
             backends,
+            daemon_config,
             flow: Arc::new(FlowManager::new()),
             ble: Arc::new(BleManager::unavailable()),
             auto_reconnect: false,
@@ -223,7 +250,11 @@ impl AppState {
 /// users away from the third-party DriverKit dependency. EEPROM sits at the
 /// end because it always coexists with one of the software backends rather
 /// than competing for selection.
-fn build_backend_registry(device: DeviceHandle, kanata: Arc<KanataManager>) -> BackendRegistry {
+fn build_backend_registry(
+    device: DeviceHandle,
+    kanata: Arc<KanataManager>,
+    pin: Option<BackendId>,
+) -> BackendRegistry {
     let mut backends: Vec<Arc<dyn Backend>> = Vec::new();
 
     #[cfg(target_os = "macos")]
@@ -236,7 +267,7 @@ fn build_backend_registry(device: DeviceHandle, kanata: Arc<KanataManager>) -> B
     backends.push(Arc::new(KanataBackend::new(kanata)));
     backends.push(Arc::new(EepromBackend::new(device)));
 
-    BackendRegistry::new(backends)
+    BackendRegistry::new_with_pin(backends, pin)
 }
 
 fn default_db_path() -> anyhow::Result<std::path::PathBuf> {

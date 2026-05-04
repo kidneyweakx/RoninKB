@@ -69,17 +69,27 @@ pub async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
 /// `POST /backend/select` — switch the active backend. Returns 404 if the
 /// requested id isn't registered. Does **not** call `apply()` on the new
 /// backend; the next profile load drives that.
+///
+/// Persists `[backend].pin` in `config.toml` so the choice survives daemon
+/// restart (RFC 0001 §4.4). A persistence failure is logged but doesn't
+/// block the response — the in-memory state is the source of truth and the
+/// user can always re-select.
 pub async fn select(
     State(state): State<AppState>,
     JsonBody(body): JsonBody<SelectBody>,
 ) -> ApiResult<Json<SelectResponse>> {
     let registry = state.backends.clone();
+    let config = state.daemon_config.clone();
     let id = body.id;
-    tokio::task::spawn_blocking(move || registry.select(id))
-        .await
-        .map_err(|e| ApiError::Internal(format!("backend select task: {e}")))?
-        .map_err(|e| match e {
-            RegistryError::UnknownBackend(_) => ApiError::NotFound,
-        })?;
+    tokio::task::spawn_blocking(move || {
+        registry.select(id)?;
+        config.set_pinned_backend(id);
+        Ok::<_, RegistryError>(())
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("backend select task: {e}")))?
+    .map_err(|e| match e {
+        RegistryError::UnknownBackend(_) => ApiError::NotFound,
+    })?;
     Ok(Json(SelectResponse { active: id }))
 }

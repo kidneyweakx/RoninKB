@@ -6,6 +6,7 @@
 pub mod autostart;
 pub mod backend;
 pub mod ble;
+pub mod config;
 pub mod db;
 pub mod error;
 pub mod flow;
