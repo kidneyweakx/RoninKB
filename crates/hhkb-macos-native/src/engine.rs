@@ -32,7 +32,33 @@ use crate::keycode::HidUsage;
 /// responsive. The M1 kill-switch criterion bounds this at 300ms ceiling.
 pub const CAPS_HOLD_TAP_TIMEOUT_MS: u16 = 200;
 
-/// HoldTap configuration for the Caps-Lock cell of the layout.
+/// Spec for the Caps cell of the layout, used by `Engine::with_caps_holdtap`.
+/// Allows the daemon to translate a `ViaProfile` into a parameterised engine
+/// without the engine knowing about VIA / JSON.
+#[derive(Debug, Clone)]
+pub enum CapsBindingSpec {
+    /// HoldTap: tap emits `tap`, hold (after `timeout_ms`) emits `hold`.
+    HoldTap {
+        timeout_ms: u16,
+        hold: KeyCode,
+        tap: KeyCode,
+    },
+    /// No binding — Caps Lock passes through unchanged.
+    Passthrough,
+}
+
+impl CapsBindingSpec {
+    /// Default M1 PoC binding: tap=Esc, hold=LCtrl, 200ms.
+    pub const fn caps_ctrl_esc() -> Self {
+        Self::HoldTap {
+            timeout_ms: CAPS_HOLD_TAP_TIMEOUT_MS,
+            hold: KeyCode::LCtrl,
+            tap: KeyCode::Escape,
+        }
+    }
+}
+
+/// HoldTap configuration for the Caps-Lock cell of the layout (PoC default).
 ///
 /// `Default` config means: hold action resolves only after timeout elapses
 /// or another key is also released before timeout. `HoldOnOtherKeyPress`
@@ -48,8 +74,12 @@ static HOLD_TAP_CAPS: HoldTapAction<'static, Infallible> = HoldTapAction {
     on_press_reset_timeout_to: None,
 };
 
-/// One layer × one row × one column — the Caps cell only.
+/// One layer × one row × one column — the Caps cell only (PoC default).
 static LAYERS: [[[Action<'static, Infallible>; 1]; 1]; 1] = [[[Action::HoldTap(&HOLD_TAP_CAPS)]]];
+
+/// Layout slot meaning "leave Caps Lock alone", used by Passthrough.
+static LAYERS_PASSTHROUGH: [[[Action<'static, Infallible>; 1]; 1]; 1] =
+    [[[Action::KeyCode(KeyCode::CapsLock)]]];
 
 /// `Layout::new_with_trans_action_settings` requires a `src_keys` row used to
 /// resolve `Action::Trans` against. Our PoC has no Trans actions; passing
@@ -93,6 +123,55 @@ impl Engine {
             layout,
             passthrough: BTreeSet::new(),
             last_active: BTreeSet::new(),
+        }
+    }
+
+    /// Construct a fresh engine from a runtime spec.
+    ///
+    /// Note: keyberon requires `'static` references for layouts. To support
+    /// runtime-configured layouts we `Box::leak` the layer storage. The leak
+    /// is bounded — one allocation per engine swap — and profile changes are
+    /// rare events in practice (user picks a new profile, daemon swaps).
+    /// The cost is paid in a one-time `Box::new` of two small structs.
+    pub fn from_spec(spec: &CapsBindingSpec) -> Self {
+        match spec {
+            CapsBindingSpec::Passthrough => {
+                let layout = Layout::new_with_trans_action_settings(
+                    &SRC_KEYS,
+                    &LAYERS_PASSTHROUGH,
+                    true,
+                    false,
+                );
+                Self {
+                    layout,
+                    passthrough: BTreeSet::new(),
+                    last_active: BTreeSet::new(),
+                }
+            }
+            CapsBindingSpec::HoldTap {
+                timeout_ms,
+                hold,
+                tap,
+            } => {
+                let holdtap: &'static HoldTapAction<'static, Infallible> =
+                    Box::leak(Box::new(HoldTapAction {
+                        timeout: *timeout_ms,
+                        hold: Action::KeyCode(*hold),
+                        tap: Action::KeyCode(*tap),
+                        timeout_action: Action::KeyCode(*hold),
+                        config: HoldTapConfig::Default,
+                        tap_hold_interval: 0,
+                        on_press_reset_timeout_to: None,
+                    }));
+                let layers: &'static [[[Action<'static, Infallible>; 1]; 1]; 1] =
+                    Box::leak(Box::new([[[Action::HoldTap(holdtap)]]]));
+                let layout = Layout::new_with_trans_action_settings(&SRC_KEYS, layers, true, false);
+                Self {
+                    layout,
+                    passthrough: BTreeSet::new(),
+                    last_active: BTreeSet::new(),
+                }
+            }
         }
     }
 

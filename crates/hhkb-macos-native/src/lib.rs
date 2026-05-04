@@ -25,7 +25,10 @@ pub mod inject;
 #[cfg(target_os = "macos")]
 pub mod iohid_seize;
 
-pub use engine::{Engine, EngineEvent, EngineOutput};
+pub use engine::{CapsBindingSpec, Engine, EngineEvent, EngineOutput};
+// Re-export so daemon-side profile translation can name keyberon KeyCodes
+// without taking a direct dependency on kanata-keyberon.
 pub use error::{Error, Result};
+pub use kanata_keyberon::key_code::KeyCode;
 pub use keycode::HidUsage;
 pub use profile::{caps_ctrl_esc_layout, PocBinding};
