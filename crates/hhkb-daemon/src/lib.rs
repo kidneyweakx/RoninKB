@@ -4,6 +4,7 @@
 //! `main.rs` binary and the integration tests can reuse the same code paths.
 
 pub mod autostart;
+pub mod backend;
 pub mod ble;
 pub mod db;
 pub mod error;
