@@ -255,17 +255,18 @@ fn build_backend_registry(
     kanata: Arc<KanataManager>,
     pin: Option<BackendId>,
 ) -> BackendRegistry {
-    let mut backends: Vec<Arc<dyn Backend>> = Vec::new();
+    let kanata_backend: Arc<dyn Backend> = Arc::new(KanataBackend::new(kanata));
+    let eeprom_backend: Arc<dyn Backend> = Arc::new(EepromBackend::new(device));
 
     #[cfg(target_os = "macos")]
-    {
-        backends.push(Arc::new(
-            crate::backend::macos_native::MacosNativeBackend::new(),
-        ));
-        backends.push(Arc::new(crate::backend::hidutil::HidutilBackend::new()));
-    }
-    backends.push(Arc::new(KanataBackend::new(kanata)));
-    backends.push(Arc::new(EepromBackend::new(device)));
+    let backends: Vec<Arc<dyn Backend>> = vec![
+        Arc::new(crate::backend::macos_native::MacosNativeBackend::new()),
+        Arc::new(crate::backend::hidutil::HidutilBackend::new()),
+        kanata_backend,
+        eeprom_backend,
+    ];
+    #[cfg(not(target_os = "macos"))]
+    let backends: Vec<Arc<dyn Backend>> = vec![kanata_backend, eeprom_backend];
 
     BackendRegistry::new_with_pin(backends, pin)
 }

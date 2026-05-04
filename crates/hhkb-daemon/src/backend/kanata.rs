@@ -5,12 +5,15 @@
 //! treat all backends uniformly. The supervisor itself is unchanged — see
 //! `crate::kanata` for the actual process-management code.
 
+#[cfg(target_os = "macos")]
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use hhkb_core::ViaProfile;
 
-use crate::kanata::{DriverState, KanataManager, KanataStatus};
+#[cfg(target_os = "macos")]
+use crate::kanata::DriverState;
+use crate::kanata::{KanataManager, KanataStatus};
 use crate::kanata_config;
 
 use super::{
@@ -21,16 +24,19 @@ use super::{
 /// Karabiner DriverKit sysext bundle id, used in the `SystemExtension`
 /// permission entry. Mirrors the constant used inside `crate::kanata` so the
 /// UI sees the same identifier in both places.
+#[cfg(target_os = "macos")]
 const KARABINER_BUNDLE_ID: &str = "org.pqrs.Karabiner-DriverKit-VirtualHIDDevice";
 
 /// Karabiner's bundled CLI to register / re-arm the sysext. `None` when the
 /// bundle isn't installed; the UI uses this to decide between an "Activate"
 /// button and "Get Karabiner-Elements" link.
+#[cfg(target_os = "macos")]
 const KARABINER_ACTIVATE_CMD: &str =
     "/Applications/.Karabiner-VirtualHIDDevice-Manager.app/Contents/MacOS/\
      Karabiner-VirtualHIDDevice-Manager activate";
 
 /// Deep-link to the Driver Extensions pane in macOS System Settings.
+#[cfg(target_os = "macos")]
 const DRIVER_EXT_DEEP_LINK: &str =
     "x-apple.systempreferences:com.apple.LoginItems-Settings.extension?\
      extensionPointIdentifier=com.apple.system_extension.driver_extension";
