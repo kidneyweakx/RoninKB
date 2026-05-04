@@ -70,6 +70,11 @@ pub fn build_router(state: AppState) -> Router {
                 .put(routes::profile::update)
                 .delete(routes::profile::delete_one),
         )
+        // -- v0.2.0 backend selection (RFC 0001) --------------------------
+        .route("/backend/list", get(routes::backend::list))
+        .route("/backend/status", get(routes::backend::status))
+        .route("/backend/select", post(routes::backend::select))
+        // -----------------------------------------------------------------
         .route("/kanata/status", get(routes::kanata::status))
         .route("/kanata/start", post(routes::kanata::start))
         .route("/kanata/stop", post(routes::kanata::stop))

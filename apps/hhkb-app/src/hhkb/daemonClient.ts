@@ -461,6 +461,87 @@ export class DaemonClient {
       { method: 'POST' },
     );
   }
+
+  // -------------------------------------------------------------------------
+  // v0.2.0 backend selection (RFC 0001)
+  // -------------------------------------------------------------------------
+
+  /** List every registered backend with its capability surface + active flag. */
+  async backendList(): Promise<BackendListResponse> {
+    return requestJson<BackendListResponse>(`${this.baseUrl}/backend/list`);
+  }
+
+  /** Get diagnostics for the active backend only. */
+  async backendStatus(): Promise<BackendStatusResponse> {
+    return requestJson<BackendStatusResponse>(`${this.baseUrl}/backend/status`);
+  }
+
+  /** Switch the active backend. */
+  async backendSelect(id: BackendId): Promise<{ active: BackendId }> {
+    return requestJson<{ active: BackendId }>(`${this.baseUrl}/backend/select`, {
+      method: 'POST',
+      body: JSON.stringify({ id }),
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// v0.2.0 backend types (mirror crates/hhkb-daemon/src/backend/mod.rs)
+// ---------------------------------------------------------------------------
+
+export type BackendId = 'eeprom' | 'macos-native' | 'hidutil' | 'kanata';
+
+export type TapHoldQuality = 'none' | 'best_effort' | 'driver_grade';
+
+export interface BackendCapabilities {
+  per_key_remap: boolean;
+  layers: number;
+  tap_hold: TapHoldQuality;
+  leader_keys: boolean;
+  combos: boolean;
+  app_aware: boolean;
+  per_device: boolean;
+  persistent: boolean;
+  hot_reload: boolean;
+  macros: boolean;
+  max_macro_length: number;
+}
+
+export type RequiredPermission =
+  | { type: 'input_monitoring'; tcc_path: string; deep_link: string }
+  | { type: 'accessibility'; tcc_path: string; deep_link: string }
+  | {
+      type: 'system_extension';
+      bundle_id: string;
+      install_command: string | null;
+    }
+  | { type: 'user_action'; description: string; deep_link: string | null };
+
+export type BackendPermissionStatus =
+  | { kind: 'granted' }
+  | { kind: 'required'; permissions: RequiredPermission[] };
+
+export interface BackendDiagnostics {
+  state: string;
+  note: string | null;
+}
+
+export interface BackendInfo {
+  id: BackendId;
+  human_name: string;
+  capabilities: BackendCapabilities;
+  permission_status: BackendPermissionStatus;
+  diagnostics: BackendDiagnostics;
+  is_active: boolean;
+}
+
+export interface BackendListResponse {
+  backends: BackendInfo[];
+  active: BackendId | null;
+}
+
+export interface BackendStatusResponse {
+  active: BackendInfo | null;
 }
 
 // ---------------------------------------------------------------------------
