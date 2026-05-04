@@ -450,6 +450,85 @@ async fn kanata_reload_writes_config_even_when_stopped() {
 }
 
 #[tokio::test]
+async fn kanata_mutating_routes_return_409_when_other_backend_active() {
+    // Switch the active backend to eeprom (always Granted in tests) and
+    // confirm v0.1.x mutating /kanata/* aliases now return 409
+    // backend_inactive per RFC 0001 §10 / M4 §82.
+    let app = app();
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/backend/select")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({"id": "eeprom"})).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Status read still 200 — old dashboards keep polling without breakage.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/kanata/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // start/stop/reload all fail closed with backend_inactive.
+    for path in ["/kanata/start", "/kanata/stop"] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::CONFLICT,
+            "expected 409 on {path}"
+        );
+        let body = body_to_json(resp).await;
+        assert_eq!(body["error"], "backend_inactive", "wrong code on {path}");
+    }
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/kanata/reload")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "config": "(defsrc a)\n(deflayer base a)\n"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body = body_to_json(resp).await;
+    assert_eq!(body["error"], "backend_inactive");
+}
+
+#[tokio::test]
 async fn kanata_reload_rejects_invalid_config() {
     let resp = app()
         .oneshot(

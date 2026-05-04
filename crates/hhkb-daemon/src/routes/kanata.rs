@@ -3,12 +3,33 @@
 use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
 
+use crate::backend::BackendId;
 use crate::db;
 use crate::error::{ApiError, ApiResult};
 use crate::kanata::{DriverActivateResult, DriverState, KanataStatus};
 use crate::kanata_config;
 use crate::state::AppState;
 use crate::ws::DaemonEvent;
+
+/// Guard for v0.1.x `/kanata/*` aliases that mutate state (start/stop/reload
+/// /driver). M4 §82: the v0.2.0 contract is "/backend/* is authoritative;
+/// /kanata/* is compat". Status reads stay 200 OK regardless of active
+/// backend so old UI dashboards don't go dark, but anything that would
+/// actually drive kanata while a different backend owns the keyboard is a
+/// 409 — old clients can detect this and prompt the user to switch via
+/// `POST /backend/select`.
+fn ensure_kanata_is_active(state: &AppState) -> ApiResult<()> {
+    let active = state.backends.active();
+    match active {
+        Some(BackendId::Kanata) => Ok(()),
+        Some(other) => Err(ApiError::BackendInactive {
+            active: other.as_str().to_string(),
+        }),
+        None => Err(ApiError::BackendInactive {
+            active: "none".to_string(),
+        }),
+    }
+}
 
 #[derive(Debug, Serialize)]
 pub struct StatusResponse {
@@ -153,6 +174,7 @@ pub async fn driver_activate(
             "driver activation is macOS-only".to_string(),
         ));
     }
+    ensure_kanata_is_active(&state)?;
     let kanata = state.kanata.clone();
     let (outcome, driver_state) = tokio::task::spawn_blocking(move || {
         kanata
@@ -174,12 +196,14 @@ pub async fn driver_open_settings(State(state): State<AppState>) -> ApiResult<Js
             "open-settings is macOS-only".to_string(),
         ));
     }
+    ensure_kanata_is_active(&state)?;
     let kanata = state.kanata.clone();
     tokio::task::spawn_blocking(move || kanata.driver_open_settings()).await??;
     Ok(Json(OkResponse { status: "opened" }))
 }
 
 pub async fn start(State(state): State<AppState>) -> ApiResult<Json<StartResponse>> {
+    ensure_kanata_is_active(&state)?;
     ensure_startup_config(&state).await?;
     let kanata = state.kanata.clone();
     let pid = tokio::task::spawn_blocking(move || kanata.start()).await??;
@@ -188,6 +212,7 @@ pub async fn start(State(state): State<AppState>) -> ApiResult<Json<StartRespons
 }
 
 pub async fn stop(State(state): State<AppState>) -> ApiResult<Json<OkResponse>> {
+    ensure_kanata_is_active(&state)?;
     let kanata = state.kanata.clone();
     tokio::task::spawn_blocking(move || kanata.stop()).await??;
     let _ = state.events.send(DaemonEvent::KanataStopped);
@@ -198,6 +223,7 @@ pub async fn reload(
     State(state): State<AppState>,
     Json(body): Json<ReloadBody>,
 ) -> ApiResult<Json<OkResponse>> {
+    ensure_kanata_is_active(&state)?;
     kanata_config::validate_kanata_config(&body.config)
         .map_err(crate::error::ApiError::InvalidConfig)?;
     let kanata = state.kanata.clone();

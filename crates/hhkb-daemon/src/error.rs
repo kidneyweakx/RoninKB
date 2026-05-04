@@ -58,6 +58,15 @@ pub enum ApiError {
     // -- Flow (cross-device clipboard sync) --------------------------------
     #[error("Flow error: {0}")]
     Flow(#[from] crate::flow::FlowError),
+
+    /// A `/kanata/*` mutating route was hit while the active backend isn't
+    /// kanata. v0.1.x clients still see compat aliases for `/kanata/status`
+    /// and `/kanata/config` (those stay 200 OK) — but driver / start / stop
+    /// / reload only make sense when kanata is the actual active backend.
+    /// Per M4 §82, returning 409 with `backend_inactive` lets old clients
+    /// detect that they need to switch via `/backend/select` first.
+    #[error("backend kanata is not active (current: {active})")]
+    BackendInactive { active: String },
 }
 
 impl From<anyhow::Error> for ApiError {
@@ -99,6 +108,7 @@ impl IntoResponse for ApiError {
             ApiError::KanataDriverMissing(_) => {
                 (StatusCode::SERVICE_UNAVAILABLE, "kanata_driver_missing")
             }
+            ApiError::BackendInactive { .. } => (StatusCode::CONFLICT, "backend_inactive"),
             ApiError::Flow(e) => match e {
                 crate::flow::FlowError::Disabled => {
                     (StatusCode::SERVICE_UNAVAILABLE, "flow_disabled")
