@@ -97,13 +97,34 @@ See [`RELEASING.md`](RELEASING.md). TL;DR: bump versions, push a `v*.*.*`
 tag, and the release workflow builds binaries, publishes a GitHub Release,
 and refreshes the Homebrew formula.
 
+## Software backends (v0.2.0+)
+
+RoninKB picks one of several software-binding backends per platform; the
+default is chosen automatically and you can switch via Settings → "Software
+backend" without reinstalling anything.
+
+| Backend | Default on | Permissions | Tap-hold | Notes |
+| --- | --- | --- | --- | --- |
+| `macos-native` | macOS | Input Monitoring + Accessibility | best-effort (~150–250 ms) | No third-party driver. CGEventTap + IOHIDManager seize. |
+| `hidutil` | (fallback) | none for modifiers | n/a | System-wide simple swaps via `hidutil property --set`. |
+| `kanata` | Linux + Windows; opt-in on macOS | Karabiner DriverKit on macOS, none elsewhere | DriverKit-grade (sub-100 ms) | Power-user path. macOS users who want home-row mods on the limit should pick this and install Karabiner-Elements. |
+| `eeprom` | always coexists | none | n/a | HHKB hardware EEPROM — durable across reboot, moves with the keyboard. |
+
+Power users on macOS who need DriverKit-grade tap-hold (e.g. fast home-row
+mods at 120+ wpm) can `brew install --cask karabiner-elements` and switch
+the active backend to `kanata` in Settings. Default users never have to.
+
 ## Acknowledgements
 
-RoninKB ships and invokes [kanata](https://github.com/jtroo/kanata) for its
-software-binding layer. kanata is licensed under
+RoninKB ships and invokes [kanata](https://github.com/jtroo/kanata) as an
+opt-in software-binding backend (default on Linux/Windows; opt-in on macOS).
+kanata is licensed under
 [LGPL-3.0](THIRD_PARTY_LICENSES/kanata-LICENSE.txt) and is included
 unmodified — see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for the
 full attribution and how RoninKB satisfies the LGPL obligations.
+
+The macOS native backend uses [keyberon](https://github.com/TeXitoi/keyberon)
+(MIT/Apache) for its tap-hold + layer engine, via the `kanata-keyberon` fork.
 
 ## License
 

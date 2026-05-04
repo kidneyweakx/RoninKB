@@ -12,9 +12,15 @@ This repo ships two flavors of binary distribution:
    - `crates/hhkb-core/Cargo.toml`
    - `crates/hhkb-cli/Cargo.toml`
    - `crates/hhkb-daemon/Cargo.toml`
+   - `crates/hhkb-macos-native/Cargo.toml` (v0.2.0+ workspace member)
    - `apps/hhkb-app/package.json`
    - `Formula/roninkb.rb` (`version "..."` — the release workflow will also
      rewrite this, but keeping it in sync locally avoids noisy diffs)
+
+   v0.2.0+ ships a single daemon binary on every platform. `hhkb-macos-native`
+   is a workspace member but does **not** produce a separate binary; it
+   compiles into `hhkb-daemon` on macOS via a `cfg(target_os = "macos")`
+   dependency. The macOS release archive is identical in shape to v0.1.x.
 
 2. Commit and tag:
 
