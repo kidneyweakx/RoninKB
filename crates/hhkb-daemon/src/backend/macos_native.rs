@@ -26,7 +26,10 @@ use core_foundation::runloop::CFRunLoop;
 use hhkb_core::ViaProfile;
 use hhkb_macos_native::engine::Transition;
 use hhkb_macos_native::event_tap::{install_and_run, ObservedEvent, Verdict};
-use hhkb_macos_native::{inject, CapsBindingSpec, Engine, EngineEvent, HidUsage, KeyCode};
+use hhkb_macos_native::{
+    inject, passthrough_grid, set_cell, CapsBindingSpec, Engine, EngineEvent, HidUsage, KeyAction,
+    KeyCode, COLS, ROWS,
+};
 
 use super::{
     Backend, BackendDiagnostics, BackendError, BackendId, Capabilities, PermissionStatus,
@@ -48,6 +51,11 @@ struct Runtime {
     /// `Mutex<Option<...>>` because we need to set it from the worker thread
     /// and read it from `teardown`.
     tap_runloop: Arc<Mutex<Option<CFRunLoop>>>,
+    /// Shared engine handle so `apply()` can hot-swap the layout in place
+    /// without restarting the tap/tick threads. The tap callback and tick
+    /// thread both lock this; in normal operation contention is per-event
+    /// and trivial.
+    engine: Arc<Mutex<Engine>>,
 }
 
 pub struct MacosNativeBackend {
@@ -143,25 +151,32 @@ impl Backend for MacosNativeBackend {
             return Err(BackendError::NotReady(missing));
         }
 
-        let spec = parse_caps_binding(profile)?;
+        let new_engine = build_engine_for_profile(profile)?;
 
         let mut guard = self
             .runtime
             .lock()
             .expect("MacosNativeBackend runtime mutex poisoned");
-        if guard.is_some() {
-            // Already running. The honest path is a hot-swap of the engine
-            // state, but that requires careful modifier draining — keyberon's
-            // Layout type doesn't expose a "swap layout" cheaply without
-            // dropping in-flight modifier state. For now we treat repeated
-            // apply with the same shape as a no-op and require an explicit
-            // teardown+apply for a layout change. M2 finishing-finishing
-            // work could swap by signalling the tap thread.
+
+        if let Some(runtime) = guard.as_ref() {
+            // Hot-swap: the threads keep running, we just replace the engine
+            // contents in place. The tap callback's next event will see the
+            // new ownership map; the tick thread's next iteration will diff
+            // the carried-over `last_active` against the new layout's active
+            // set, emitting releases for stale modifiers (RFC 0001 §5.3.2 —
+            // hot-reload is what the native backend is for).
+            let mut engine_guard = runtime
+                .engine
+                .lock()
+                .expect("MacosNativeBackend engine mutex poisoned");
+            let mut next = new_engine;
+            engine_guard.carry_over_to(&mut next);
+            *engine_guard = next;
             return Ok(());
         }
 
         let stop = Arc::new(AtomicBool::new(false));
-        let engine = Arc::new(Mutex::new(Engine::from_spec(&spec)));
+        let engine = Arc::new(Mutex::new(new_engine));
         let tap_runloop: Arc<Mutex<Option<CFRunLoop>>> = Arc::new(Mutex::new(None));
 
         // Tick thread: drains engine output every 1ms, re-injects synthetic
@@ -204,19 +219,23 @@ impl Backend for MacosNativeBackend {
                 }
                 let cb_engine = Arc::clone(&tap_engine);
                 let result = install_and_run(Box::new(move |ev| match ev {
-                    ObservedEvent::Pressed(HidUsage::CAPS_LOCK) => {
-                        cb_engine
-                            .lock()
-                            .expect("engine poisoned")
-                            .input(EngineEvent::Press(HidUsage::CAPS_LOCK));
-                        Verdict::Suppress
+                    ObservedEvent::Pressed(usage) => {
+                        let mut e = cb_engine.lock().expect("engine poisoned");
+                        if e.is_owned(usage) {
+                            e.input(EngineEvent::Press(usage));
+                            Verdict::Suppress
+                        } else {
+                            Verdict::PassThrough
+                        }
                     }
-                    ObservedEvent::Released(HidUsage::CAPS_LOCK) => {
-                        cb_engine
-                            .lock()
-                            .expect("engine poisoned")
-                            .input(EngineEvent::Release(HidUsage::CAPS_LOCK));
-                        Verdict::Suppress
+                    ObservedEvent::Released(usage) => {
+                        let mut e = cb_engine.lock().expect("engine poisoned");
+                        if e.is_owned(usage) {
+                            e.input(EngineEvent::Release(usage));
+                            Verdict::Suppress
+                        } else {
+                            Verdict::PassThrough
+                        }
                     }
                     _ => Verdict::PassThrough,
                 }));
@@ -234,6 +253,7 @@ impl Backend for MacosNativeBackend {
             tap_thread: Some(tap_thread),
             tick_thread: Some(tick_thread),
             tap_runloop,
+            engine,
         });
         Ok(())
     }
@@ -308,62 +328,115 @@ impl Backend for MacosNativeBackend {
     }
 }
 
-/// Translate the profile's macOS-native section (if any) into an engine spec.
-/// Returns the M1 PoC default (Caps tap=Esc / hold=LCtrl, 200ms) when the
-/// profile is silent — so the native backend always has something to apply.
+/// Translate the profile's macOS-native section (if any) into an engine
+/// instance, ready to drop into the runtime. Returns the M1 PoC default
+/// (Caps tap=Esc / hold=LCtrl, 200ms) when the profile is silent — so the
+/// native backend always has something to apply.
 ///
-/// Recognised JSON shape (under `_roninKB.software.config` when
+/// Two recognised JSON shapes (under `_roninKB.software.config` when
 /// `engine == "macos-native"`):
-/// ```json
-/// {
-///   "caps": {
-///     "type": "holdtap",
-///     "timeout_ms": 200,
-///     "tap":  "esc",
-///     "hold": "lctl"
-///   }
-/// }
-/// ```
-/// or `{ "caps": { "type": "passthrough" } }` to leave Caps Lock alone.
-fn parse_caps_binding(profile: &ViaProfile) -> Result<CapsBindingSpec, BackendError> {
+///
+/// 1. **Legacy single-binding** (M1 PoC, kept for back-compat):
+///    ```json
+///    { "caps": { "type": "holdtap", "tap": "esc", "hold": "lctl" } }
+///    ```
+///    or `{ "caps": { "type": "passthrough" } }` to leave Caps alone.
+///
+/// 2. **Per-position bindings** (M2): a free-form map keyed by source key
+///    name, value is a per-cell action.
+///    ```json
+///    {
+///      "bindings": {
+///        "caps": { "type": "holdtap", "tap": "esc", "hold": "lctl" },
+///        "a":    { "type": "remap",   "to": "b" }
+///      }
+///    }
+///    ```
+///    Unspecified keys default to passthrough. The `caps` shortcut is
+///    treated as `bindings.caps` if both are present (last-write-wins).
+fn build_engine_for_profile(profile: &ViaProfile) -> Result<Engine, BackendError> {
     let Some(software) = profile.ronin.as_ref().and_then(|r| r.software.as_ref()) else {
-        return Ok(CapsBindingSpec::caps_ctrl_esc());
+        return Ok(Engine::from_spec(&CapsBindingSpec::caps_ctrl_esc()));
     };
     if software.engine != "macos-native" {
-        return Ok(CapsBindingSpec::caps_ctrl_esc());
+        return Ok(Engine::from_spec(&CapsBindingSpec::caps_ctrl_esc()));
     }
 
-    #[derive(serde::Deserialize)]
-    struct NativeConfig {
-        caps: Option<CapsConfig>,
+    let parsed = parse_native_config(&software.config)?;
+    if parsed.is_empty() {
+        return Ok(Engine::from_spec(&CapsBindingSpec::caps_ctrl_esc()));
     }
-    #[derive(serde::Deserialize)]
-    #[serde(tag = "type", rename_all = "lowercase")]
-    enum CapsConfig {
-        HoldTap {
-            #[serde(default = "default_timeout_ms")]
-            timeout_ms: u16,
-            tap: String,
-            hold: String,
-        },
-        Passthrough,
-    }
-    fn default_timeout_ms() -> u16 {
-        200
+    Ok(Engine::from_grid(parsed.into_grid()?))
+}
+
+#[derive(serde::Deserialize, Default)]
+struct NativeConfig {
+    /// Legacy shortcut for the Caps cell.
+    #[serde(default)]
+    caps: Option<CellConfig>,
+    /// Free-form per-key bindings; key is one of [`parse_keycode`]'s names.
+    #[serde(default)]
+    bindings: std::collections::HashMap<String, CellConfig>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum CellConfig {
+    HoldTap {
+        #[serde(default = "default_timeout_ms")]
+        timeout_ms: u16,
+        tap: String,
+        hold: String,
+    },
+    Remap {
+        to: String,
+    },
+    Passthrough,
+}
+
+fn default_timeout_ms() -> u16 {
+    200
+}
+
+impl NativeConfig {
+    fn is_empty(&self) -> bool {
+        self.caps.is_none() && self.bindings.is_empty()
     }
 
-    let parsed: NativeConfig = serde_json::from_str(&software.config).map_err(|e| {
-        BackendError::ProfileRejected(format!(
-            "macos-native profile JSON did not match schema: {e}"
-        ))
-    })?;
+    /// Convert into a per-position `KeyAction` grid suitable for
+    /// [`Engine::from_grid`]. Returns `ProfileRejected` if any key name or
+    /// keycode in the spec doesn't resolve.
+    fn into_grid(self) -> Result<[[KeyAction; COLS]; ROWS], BackendError> {
+        let mut grid = passthrough_grid();
 
-    let Some(caps) = parsed.caps else {
-        return Ok(CapsBindingSpec::caps_ctrl_esc());
-    };
-    Ok(match caps {
-        CapsConfig::Passthrough => CapsBindingSpec::Passthrough,
-        CapsConfig::HoldTap {
+        if let Some(cell) = self.caps {
+            apply_cell(&mut grid, "caps", cell)?;
+        }
+        for (name, cell) in self.bindings {
+            apply_cell(&mut grid, &name, cell)?;
+        }
+        Ok(grid)
+    }
+}
+
+fn apply_cell(
+    grid: &mut [[KeyAction; COLS]; ROWS],
+    src_name: &str,
+    cell: CellConfig,
+) -> Result<(), BackendError> {
+    let src_kc = parse_keycode(src_name)
+        .ok_or_else(|| BackendError::ProfileRejected(format!("unknown source key {src_name:?}")))?;
+    let src_hid = HidUsage::from(src_kc);
+
+    let action = match cell {
+        CellConfig::Passthrough => KeyAction::Passthrough,
+        CellConfig::Remap { to } => {
+            let target = parse_keycode(&to).ok_or_else(|| {
+                BackendError::ProfileRejected(format!("unknown remap target {to:?}"))
+            })?;
+            KeyAction::Remap(target)
+        }
+        CellConfig::HoldTap {
             timeout_ms,
             tap,
             hold,
@@ -374,21 +447,85 @@ fn parse_caps_binding(profile: &ViaProfile) -> Result<CapsBindingSpec, BackendEr
             let hold = parse_keycode(&hold).ok_or_else(|| {
                 BackendError::ProfileRejected(format!("unknown hold keycode {hold:?}"))
             })?;
-            CapsBindingSpec::HoldTap {
+            KeyAction::HoldTap {
                 timeout_ms,
-                hold,
                 tap,
+                hold,
             }
         }
+    };
+
+    set_cell(grid, src_hid, action);
+    Ok(())
+}
+
+fn parse_native_config(s: &str) -> Result<NativeConfig, BackendError> {
+    serde_json::from_str(s).map_err(|e| {
+        BackendError::ProfileRejected(format!(
+            "macos-native profile JSON did not match schema: {e}"
+        ))
     })
 }
 
-/// Map the small set of names the profile schema accepts to keyberon's
-/// `KeyCode`. Deliberately narrow — Caps→X tap-hold is the v0.2.0 use case;
-/// arbitrary keycode mapping for the native backend is M2-finishing-finishing
-/// territory once a real layout pipeline lands.
+/// Map the names the profile schema accepts to keyberon's `KeyCode`.
+/// Covers letters a–z, digits 0–9, modifiers, common edit keys, and `caps`.
+/// The set is deliberately bounded — extending it is a one-line change
+/// when a new key is needed, and the parser surfaces unknown names as
+/// `ProfileRejected` so misspellings don't silently no-op.
 fn parse_keycode(s: &str) -> Option<KeyCode> {
     let n = s.trim().to_ascii_lowercase();
+    if n.len() == 1 {
+        let c = n.as_bytes()[0];
+        if c.is_ascii_lowercase() {
+            // Map 'a'..'z' to KeyCode::A..KeyCode::Z. The kanata-keyberon
+            // KeyCode discriminants are not portable across versions, so
+            // build via match rather than `transmute`.
+            return Some(match c {
+                b'a' => KeyCode::A,
+                b'b' => KeyCode::B,
+                b'c' => KeyCode::C,
+                b'd' => KeyCode::D,
+                b'e' => KeyCode::E,
+                b'f' => KeyCode::F,
+                b'g' => KeyCode::G,
+                b'h' => KeyCode::H,
+                b'i' => KeyCode::I,
+                b'j' => KeyCode::J,
+                b'k' => KeyCode::K,
+                b'l' => KeyCode::L,
+                b'm' => KeyCode::M,
+                b'n' => KeyCode::N,
+                b'o' => KeyCode::O,
+                b'p' => KeyCode::P,
+                b'q' => KeyCode::Q,
+                b'r' => KeyCode::R,
+                b's' => KeyCode::S,
+                b't' => KeyCode::T,
+                b'u' => KeyCode::U,
+                b'v' => KeyCode::V,
+                b'w' => KeyCode::W,
+                b'x' => KeyCode::X,
+                b'y' => KeyCode::Y,
+                b'z' => KeyCode::Z,
+                _ => unreachable!(),
+            });
+        }
+        if c.is_ascii_digit() {
+            return Some(match c {
+                b'1' => KeyCode::Kb1,
+                b'2' => KeyCode::Kb2,
+                b'3' => KeyCode::Kb3,
+                b'4' => KeyCode::Kb4,
+                b'5' => KeyCode::Kb5,
+                b'6' => KeyCode::Kb6,
+                b'7' => KeyCode::Kb7,
+                b'8' => KeyCode::Kb8,
+                b'9' => KeyCode::Kb9,
+                b'0' => KeyCode::Kb0,
+                _ => unreachable!(),
+            });
+        }
+    }
     Some(match n.as_str() {
         "esc" | "escape" => KeyCode::Escape,
         "tab" => KeyCode::Tab,
@@ -396,6 +533,7 @@ fn parse_keycode(s: &str) -> Option<KeyCode> {
         "enter" | "ret" => KeyCode::Enter,
         "bspc" | "backspace" => KeyCode::BSpace,
         "del" | "delete" => KeyCode::Delete,
+        "caps" | "capslock" => KeyCode::CapsLock,
         "lctl" | "lctrl" => KeyCode::LCtrl,
         "rctl" | "rctrl" => KeyCode::RCtrl,
         "lsft" | "lshift" => KeyCode::LShift,
@@ -500,7 +638,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_caps_binding_returns_default_when_profile_is_silent() {
+    fn build_engine_returns_default_when_profile_is_silent() {
         let p = ViaProfile {
             name: "p".into(),
             vendor_id: "0x0".into(),
@@ -512,62 +650,83 @@ mod tests {
             keycodes: vec![],
             ronin: None,
         };
-        let spec = parse_caps_binding(&p).expect("parse default");
-        match spec {
-            CapsBindingSpec::HoldTap { tap, hold, .. } => {
-                assert!(matches!(tap, KeyCode::Escape));
-                assert!(matches!(hold, KeyCode::LCtrl));
-            }
-            other => panic!("expected default holdtap, got {other:?}"),
-        }
+        let engine = build_engine_for_profile(&p).expect("default engine");
+        // Default = Caps→Ctrl/Esc, so Caps is owned and nothing else.
+        assert!(engine.is_owned(HidUsage::CAPS_LOCK));
+        assert!(!engine.is_owned(HidUsage::A));
     }
 
     #[test]
-    fn parse_caps_binding_accepts_holdtap_overrides() {
+    fn build_engine_accepts_legacy_caps_holdtap_overrides() {
         let p = with_software(
             "macos-native",
             r#"{"caps":{"type":"holdtap","timeout_ms":250,"tap":"esc","hold":"rctl"}}"#,
         );
-        let spec = parse_caps_binding(&p).expect("parse override");
-        match spec {
-            CapsBindingSpec::HoldTap {
-                timeout_ms,
-                tap,
-                hold,
-            } => {
-                assert_eq!(timeout_ms, 250);
-                assert!(matches!(tap, KeyCode::Escape));
-                assert!(matches!(hold, KeyCode::RCtrl));
-            }
-            other => panic!("expected holdtap, got {other:?}"),
-        }
+        let engine = build_engine_for_profile(&p).expect("legacy caps override");
+        assert!(engine.is_owned(HidUsage::CAPS_LOCK));
     }
 
     #[test]
-    fn parse_caps_binding_accepts_passthrough() {
+    fn build_engine_accepts_caps_passthrough() {
         let p = with_software("macos-native", r#"{"caps":{"type":"passthrough"}}"#);
-        let spec = parse_caps_binding(&p).expect("parse passthrough");
-        assert!(matches!(spec, CapsBindingSpec::Passthrough));
+        let engine = build_engine_for_profile(&p).expect("caps passthrough");
+        // Passthrough means Caps is no longer owned — OS handles it natively.
+        assert!(!engine.is_owned(HidUsage::CAPS_LOCK));
     }
 
     #[test]
-    fn parse_caps_binding_rejects_unknown_keycode() {
+    fn build_engine_rejects_unknown_keycode() {
         let p = with_software(
             "macos-native",
             r#"{"caps":{"type":"holdtap","tap":"esc","hold":"meta"}}"#,
         );
-        let err = parse_caps_binding(&p).unwrap_err();
+        let err = build_engine_for_profile(&p)
+            .err()
+            .expect("expected ProfileRejected");
         assert!(matches!(err, BackendError::ProfileRejected(_)));
     }
 
     #[test]
-    fn parse_caps_binding_ignores_other_engines() {
+    fn build_engine_ignores_other_engines() {
         // A kanata profile or hidutil profile shouldn't make the native
         // backend complain — the M4 selection layer routes profiles to the
         // matching backend, but the native backend should fall back to its
         // PoC default rather than reject every non-native profile.
         let p = with_software("kanata", "(defcfg)");
-        let spec = parse_caps_binding(&p).expect("ignore non-native engine");
-        assert!(matches!(spec, CapsBindingSpec::HoldTap { .. }));
+        let engine = build_engine_for_profile(&p).expect("ignore non-native engine");
+        assert!(engine.is_owned(HidUsage::CAPS_LOCK));
+    }
+
+    #[test]
+    fn build_engine_supports_per_key_remap_via_bindings_block() {
+        // Per-position layout: 'A' remapped to 'B', plus the caps shortcut.
+        let p = with_software(
+            "macos-native",
+            r#"{
+                "caps": {"type":"holdtap","tap":"esc","hold":"lctl"},
+                "bindings": {
+                    "a": {"type":"remap","to":"b"}
+                }
+            }"#,
+        );
+        let engine = build_engine_for_profile(&p).expect("per-key bindings");
+        assert!(engine.is_owned(HidUsage::CAPS_LOCK), "caps remains owned");
+        assert!(engine.is_owned(HidUsage::A), "remap claims source key");
+        assert!(
+            !engine.is_owned(HidUsage::B),
+            "remap target stays passthrough"
+        );
+    }
+
+    #[test]
+    fn build_engine_rejects_unknown_remap_source() {
+        let p = with_software(
+            "macos-native",
+            r#"{"bindings":{"meta":{"type":"remap","to":"a"}}}"#,
+        );
+        let err = build_engine_for_profile(&p)
+            .err()
+            .expect("expected ProfileRejected");
+        assert!(matches!(err, BackendError::ProfileRejected(_)));
     }
 }
