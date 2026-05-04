@@ -4,7 +4,9 @@
 //! `main.rs` binary and the integration tests can reuse the same code paths.
 
 pub mod autostart;
+pub mod backend;
 pub mod ble;
+pub mod config;
 pub mod db;
 pub mod error;
 pub mod flow;
@@ -69,12 +71,25 @@ pub fn build_router(state: AppState) -> Router {
                 .put(routes::profile::update)
                 .delete(routes::profile::delete_one),
         )
+        // -- v0.2.0 backend selection (RFC 0001) --------------------------
+        .route("/backend/list", get(routes::backend::list))
+        .route("/backend/status", get(routes::backend::status))
+        .route("/backend/select", post(routes::backend::select))
+        // -----------------------------------------------------------------
         .route("/kanata/status", get(routes::kanata::status))
         .route("/kanata/start", post(routes::kanata::start))
         .route("/kanata/stop", post(routes::kanata::stop))
         .route("/kanata/reload", post(routes::kanata::reload))
         .route("/kanata/config", get(routes::kanata::get_config))
         .route("/kanata/reveal", post(routes::kanata::reveal))
+        .route(
+            "/kanata/driver/activate",
+            post(routes::kanata::driver_activate),
+        )
+        .route(
+            "/kanata/driver/open-settings",
+            post(routes::kanata::driver_open_settings),
+        )
         // -- Flow (cross-device clipboard sync) ---------------------------
         .route(
             "/flow/config",

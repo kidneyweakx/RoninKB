@@ -5,9 +5,17 @@
  * automatically once. Users can re-open it manually from the Settings
  * drawer, in which case `open` is set to true without clearing
  * `completed`.
+ *
+ * v0.2.0 (RFC 0001 §7.2 / M4 §85): the wizard now drives backend
+ * selection + verification. The user's verified-binding self-attestation
+ * is recorded as `verifiedBackend` so the wizard can refuse to "complete"
+ * until something has actually been tested. Cleared whenever the user
+ * switches backend mid-wizard so they can't accidentally carry a
+ * verification for a different engine.
  */
 
 import { create } from 'zustand';
+import type { BackendId } from '../hhkb/daemonClient';
 
 const LS_KEY = 'roninKB.setupCompleted';
 
@@ -37,6 +45,13 @@ interface SetupState {
   completed: boolean;
   currentStep: SetupStep;
   open: boolean;
+  /**
+   * The backend the user successfully tested in the verification step.
+   * `null` until they tick the verification checkbox. Cleared when they
+   * switch to a different backend so verification doesn't leak across
+   * engines.
+   */
+  verifiedBackend: BackendId | null;
 
   complete: () => void;
   skip: () => void;
@@ -45,12 +60,15 @@ interface SetupState {
   goNext: () => void;
   goBack: () => void;
   setStep: (n: SetupStep) => void;
+  markVerified: (id: BackendId) => void;
+  clearVerified: () => void;
 }
 
 export const useSetupStore = create<SetupState>((set, get) => ({
   completed: loadCompleted(),
   currentStep: 0,
   open: false,
+  verifiedBackend: null,
 
   complete() {
     saveCompleted(true);
@@ -61,7 +79,7 @@ export const useSetupStore = create<SetupState>((set, get) => ({
     set({ completed: true, open: false });
   },
   openManually() {
-    set({ open: true, currentStep: 0 });
+    set({ open: true, currentStep: 0, verifiedBackend: null });
   },
   close() {
     set({ open: false });
@@ -76,5 +94,11 @@ export const useSetupStore = create<SetupState>((set, get) => ({
   },
   setStep(n) {
     set({ currentStep: n });
+  },
+  markVerified(id) {
+    set({ verifiedBackend: id });
+  },
+  clearVerified() {
+    set({ verifiedBackend: null });
   },
 }));

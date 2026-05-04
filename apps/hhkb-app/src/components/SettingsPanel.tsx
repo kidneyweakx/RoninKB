@@ -23,6 +23,8 @@ import { useDeviceStore } from '../store/deviceStore';
 import { useSetupStore } from '../store/setupStore';
 import { useFlowStore } from '../store/flowStore';
 import { useKanataStore } from '../store/kanataStore';
+import { useBackendStore } from '../store/backendStore';
+import type { BackendInfo, KanataDriverState } from '../hhkb/daemonClient';
 
 interface Props {
   isOpen: boolean;
@@ -94,24 +96,30 @@ export function SettingsPanel({ isOpen, onClose }: Props) {
   const kanataLoading = useKanataStore((s) => s.loading);
   const kanataPath = useKanataStore((s) => s.configPath);
   const kanataInputMonitoring = useKanataStore((s) => s.inputMonitoringGranted);
-  const kanataDriverActivated = useKanataStore((s) => s.driverActivated);
+  const kanataDriverState = useKanataStore((s) => s.driverState);
+  const kanataDriverActivating = useKanataStore((s) => s.driverActivating);
   const kanataDevicePath = useKanataStore((s) => s.devicePath);
   const kanataStderrTail = useKanataStore((s) => s.stderrTail);
   const kanataError = useKanataStore((s) => s.error);
   const kanataStart = useKanataStore((s) => s.start);
   const kanataStop = useKanataStore((s) => s.stop);
   const fetchKanataStatus = useKanataStore((s) => s.fetchStatus);
+  const kanataDriverActivate = useKanataStore((s) => s.driverActivate);
+  const kanataDriverOpenSettings = useKanataStore((s) => s.driverOpenSettings);
 
   const [newPeerAddr, setNewPeerAddr] = useState('');
   const [kanataToggling, setKanataToggling] = useState(false);
+
+  const fetchBackendList = useBackendStore((s) => s.fetchList);
 
   useEffect(() => {
     if (isOpen) {
       void fetchConfig();
       void fetchHistory();
       void fetchKanataStatus();
+      void fetchBackendList();
     }
-  }, [isOpen, fetchConfig, fetchHistory, fetchKanataStatus]);
+  }, [isOpen, fetchConfig, fetchHistory, fetchKanataStatus, fetchBackendList]);
 
   async function handleKanataToggle() {
     setKanataToggling(true);
@@ -319,6 +327,12 @@ export function SettingsPanel({ isOpen, onClose }: Props) {
               </VStack>
             </Box>
 
+            {/* v0.2.0 backend selector */}
+            <Box>
+              <SectionLabel>Software backend (v0.2.0)</SectionLabel>
+              <BackendSelector />
+            </Box>
+
             {/* Kanata section */}
             <Box>
               <SectionLabel>Kanata — 軟體按鍵</SectionLabel>
@@ -377,23 +391,26 @@ export function SettingsPanel({ isOpen, onClose }: Props) {
                   </SettingsRow>
                 )}
 
-                {kanataDriverActivated !== null && (
-                  <SettingsRow
-                    label="Driver extension"
-                    description={
-                      kanataDriverActivated
-                        ? undefined
-                        : 'Open Karabiner-Elements once and approve the sysext prompt'
-                    }
-                  >
-                    <Text
-                      fontSize="10px"
-                      fontFamily="mono"
-                      color={kanataDriverActivated ? 'success' : 'warning'}
-                    >
-                      {kanataDriverActivated ? 'activated' : 'not activated'}
-                    </Text>
-                  </SettingsRow>
+                {kanataDriverState && (
+                  <KarabinerDriverWizard
+                    state={kanataDriverState}
+                    activating={kanataDriverActivating}
+                    onActivate={async () => {
+                      try {
+                        const outcome = await kanataDriverActivate();
+                        if (outcome === 'triggered') {
+                          // Sysext registration succeeded; open Settings so the
+                          // user can finish the approval click without hunting.
+                          await kanataDriverOpenSettings();
+                        }
+                      } catch {
+                        // Errors land on the kanataError row; nothing to do here.
+                      }
+                    }}
+                    onOpenSettings={() => {
+                      void kanataDriverOpenSettings();
+                    }}
+                  />
                 )}
 
                 {kanataDevicePath && (
@@ -504,4 +521,278 @@ export function SettingsPanel({ isOpen, onClose }: Props) {
       </DrawerContent>
     </Drawer>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Karabiner driver wizard
+// ---------------------------------------------------------------------------
+
+interface KarabinerDriverWizardProps {
+  state: KanataDriverState;
+  activating: boolean;
+  onActivate: () => void | Promise<void>;
+  onOpenSettings: () => void;
+}
+
+/**
+ * Per-state guidance + actions for the Karabiner DriverKit sysext.
+ *
+ * The previous version of this row was a single "activated / not activated"
+ * badge that left the user to figure out the next step. The four real states
+ * — already good, waiting for OS approval, never registered, Karabiner not
+ * installed — each have a different fix, so the panel surfaces the right
+ * action button per state instead of asking the user to guess.
+ */
+function KarabinerDriverWizard({
+  state,
+  activating,
+  onActivate,
+  onOpenSettings,
+}: KarabinerDriverWizardProps) {
+  if (state === 'activated') {
+    return (
+      <SettingsRow label="Driver extension">
+        <Text fontSize="10px" fontFamily="mono" color="success">
+          activated
+        </Text>
+      </SettingsRow>
+    );
+  }
+
+  // The unknown state means systemextensionsctl couldn't run; don't tell the
+  // user it's broken, since kanata might work anyway. Just surface the fact
+  // without a remediation button.
+  if (state === 'unknown') {
+    return (
+      <SettingsRow
+        label="Driver extension"
+        description="Could not query systemextensionsctl. Status will refresh on next poll."
+      >
+        <Text fontSize="10px" fontFamily="mono" color="text.muted">
+          unknown
+        </Text>
+      </SettingsRow>
+    );
+  }
+
+  const card = (
+    title: string,
+    body: string,
+    primaryLabel: string,
+    primaryAction: () => void | Promise<void>,
+    secondary?: { label: string; onClick: () => void },
+  ) => (
+    <Box
+      borderRadius="md"
+      borderWidth="1px"
+      borderColor="border.subtle"
+      bg="bg.surface"
+      px={3}
+      py={3}
+      mb={2}
+    >
+      <Text fontSize="sm" fontWeight={600} color="text.primary" mb={1}>
+        {title}
+      </Text>
+      <Text fontSize="xs" color="text.muted" mb={3}>
+        {body}
+      </Text>
+      <HStack spacing={2}>
+        <Button
+          size="sm"
+          variant="solid"
+          colorScheme="accent"
+          isLoading={activating}
+          onClick={() => void primaryAction()}
+        >
+          {primaryLabel}
+        </Button>
+        {secondary && (
+          <Button size="sm" variant="ghost" onClick={secondary.onClick}>
+            {secondary.label}
+          </Button>
+        )}
+      </HStack>
+    </Box>
+  );
+
+  if (state === 'waiting_for_user') {
+    return card(
+      'Driver extension waiting for approval',
+      'Karabiner-DriverKit-VirtualHIDDevice is registered but macOS still needs you to flip it on. Open System Settings → Privacy & Security → Driver Extensions and toggle it.',
+      'Open System Settings',
+      onOpenSettings,
+      { label: 'Re-trigger prompt', onClick: () => void onActivate() },
+    );
+  }
+
+  if (state === 'not_registered') {
+    return card(
+      'Driver extension not registered',
+      'Karabiner-Elements is installed but its DriverKit sysext was never registered. RoninKB can register it for you — macOS will then ask for your approval.',
+      'Activate driver',
+      onActivate,
+      { label: 'Open Settings', onClick: onOpenSettings },
+    );
+  }
+
+  // karabiner_not_installed
+  return (
+    <Box
+      borderRadius="md"
+      borderWidth="1px"
+      borderColor="border.subtle"
+      bg="bg.surface"
+      px={3}
+      py={3}
+      mb={2}
+    >
+      <Text fontSize="sm" fontWeight={600} color="text.primary" mb={1}>
+        Karabiner-Elements not installed
+      </Text>
+      <Text fontSize="xs" color="text.muted" mb={3}>
+        The kanata backend on macOS depends on Karabiner-DriverKit-VirtualHIDDevice,
+        which ships with Karabiner-Elements. Install it, then come back — or
+        switch to the macOS native backend (no third-party driver required).
+      </Text>
+      <HStack spacing={2}>
+        <Button
+          as="a"
+          size="sm"
+          variant="solid"
+          colorScheme="accent"
+          href="https://karabiner-elements.pqrs.org/"
+          target="_blank"
+          rel="noopener noreferrer"
+          leftIcon={<ExternalLink size={12} />}
+        >
+          Get Karabiner-Elements
+        </Button>
+      </HStack>
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// v0.2.0 backend selector (RFC 0001)
+// ---------------------------------------------------------------------------
+
+function BackendSelector() {
+  const backends = useBackendStore((s) => s.backends);
+  const active = useBackendStore((s) => s.active);
+  const loading = useBackendStore((s) => s.loading);
+  const selecting = useBackendStore((s) => s.selecting);
+  const error = useBackendStore((s) => s.error);
+  const select = useBackendStore((s) => s.select);
+
+  if (loading && backends.length === 0) {
+    return (
+      <Text fontSize="xs" color="text.muted">
+        Loading backends...
+      </Text>
+    );
+  }
+
+  if (error) {
+    return (
+      <Text fontSize="xs" color="danger">
+        {error}
+      </Text>
+    );
+  }
+
+  if (backends.length === 0) {
+    return (
+      <Text fontSize="xs" color="text.muted">
+        No backends available. Older daemon? `/backend/list` requires v0.2.0+.
+      </Text>
+    );
+  }
+
+  return (
+    <VStack align="stretch" spacing={2}>
+      {backends.map((b) => (
+        <BackendRow
+          key={b.id}
+          backend={b}
+          isActive={b.id === active}
+          isSelecting={selecting}
+          onSelect={() => void select(b.id)}
+        />
+      ))}
+    </VStack>
+  );
+}
+
+function BackendRow({
+  backend,
+  isActive,
+  isSelecting,
+  onSelect,
+}: {
+  backend: BackendInfo;
+  isActive: boolean;
+  isSelecting: boolean;
+  onSelect: () => void;
+}) {
+  const granted = backend.permission_status.kind === 'granted';
+  return (
+    <Box
+      borderRadius="md"
+      borderWidth="1px"
+      borderColor={isActive ? 'accent.primary' : 'border.subtle'}
+      bg={isActive ? 'bg.subtle' : 'bg.surface'}
+      px={3}
+      py={2}
+    >
+      <Flex align="center" justify="space-between" mb={1}>
+        <Box>
+          <Text fontSize="sm" fontWeight={isActive ? 700 : 500} color="text.primary">
+            {backend.human_name}
+          </Text>
+          <Text fontSize="10px" fontFamily="mono" color="text.muted">
+            {backend.id} · tap-hold {backend.capabilities.tap_hold} · layers{' '}
+            {backend.capabilities.layers}
+          </Text>
+        </Box>
+        {isActive ? (
+          <Text fontSize="10px" fontFamily="mono" color="accent.primary">
+            active
+          </Text>
+        ) : (
+          <Button
+            size="xs"
+            variant="subtle"
+            isDisabled={isSelecting}
+            isLoading={isSelecting}
+            onClick={onSelect}
+          >
+            Select
+          </Button>
+        )}
+      </Flex>
+      {!granted && (
+        <Text fontSize="10px" color="warning" mt={1}>
+          {backendPermissionSummary(backend)}
+        </Text>
+      )}
+    </Box>
+  );
+}
+
+function backendPermissionSummary(b: BackendInfo): string {
+  if (b.permission_status.kind === 'granted') return '';
+  const parts = b.permission_status.permissions.map((p) => {
+    switch (p.type) {
+      case 'input_monitoring':
+        return 'needs Input Monitoring';
+      case 'accessibility':
+        return 'needs Accessibility';
+      case 'system_extension':
+        return `needs ${p.bundle_id}`;
+      case 'user_action':
+        return p.description;
+    }
+  });
+  return parts.join(' · ');
 }

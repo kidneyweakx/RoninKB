@@ -304,11 +304,16 @@ The wizard tells home-row-mod power users to install Karabiner. The default user
 ## 13. References
 
 - [Hyperkey reference architecture (MIT)](https://github.com/feedthejim/hyperkey)
+- [Hammerspoon — Lua-driven CGEventTap remapper (MIT)](https://github.com/Hammerspoon/hammerspoon)
 - [keyberon Rust crate (MIT/Apache)](https://github.com/TeXitoi/keyberon)
 - [smart-keymap library (Apache, active 2025)](https://github.com/rgoulter/smart-keymap)
+- [kanata — LGPL engine, opt-in backend in v0.2.0](https://github.com/jtroo/kanata)
 - [Karabiner-Elements DEVELOPMENT.md (CGEventTap fallback path)](https://github.com/pqrs-org/Karabiner-Elements/blob/main/DEVELOPMENT.md)
+- [Karabiner-DriverKit-VirtualHIDDevice (LGPL sysext, the kanata-path dependency)](https://github.com/pqrs-org/Karabiner-DriverKit-VirtualHIDDevice)
 - [Apple TN2450: Remapping Keys in macOS](https://developer.apple.com/library/archive/technotes/tn2450/_index.html)
 - [Apple CGEvent.tapCreate](https://developer.apple.com/documentation/coregraphics/cgevent/tapcreate(tap:place:options:eventsofinterest:callback:userinfo:))
+- [Apple IOHIDManager (Path B seize on Tahoe)](https://developer.apple.com/documentation/iokit/iohidmanager)
+- [Apple NSWorkspace (frontmost-app + activation notifications)](https://developer.apple.com/documentation/appkit/nsworkspace)
 - [macOS 26 Tahoe Release Notes](https://developer.apple.com/documentation/macos-release-notes/macos-26-release-notes)
 - [Year of the homerow mods (Callista, 2025)](https://callistaenterprise.se/blogg/teknik/2025/01/10/homerow-mods/)
 - [CGEvent Taps and Code Signing race (Daniel Raffel, Feb 2026)](https://danielraffel.me/til/2026/02/19/cgevent-taps-and-code-signing-the-silent-disable-race/)
