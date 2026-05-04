@@ -13,13 +13,16 @@
 //! `docs/v0.2.0-plan.md` for the milestone breakdown.
 
 pub mod eeprom;
+#[cfg(target_os = "macos")]
+pub mod hidutil;
 pub mod kanata;
 #[cfg(target_os = "macos")]
 pub mod macos_native;
+pub mod registry;
 
 use std::path::PathBuf;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use hhkb_core::ViaProfile;
@@ -30,7 +33,7 @@ use hhkb_core::ViaProfile;
 
 /// Stable, machine-readable backend identifier. Lowercase ASCII; matches the
 /// `id` field returned by `/backend/list` once that endpoint lands in M4.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BackendId {
     /// HHKB hardware EEPROM (per-keyboard, durable across reboots).
@@ -52,6 +55,12 @@ impl BackendId {
             BackendId::Hidutil => "hidutil",
             BackendId::Kanata => "kanata",
         }
+    }
+}
+
+impl std::fmt::Display for BackendId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -123,8 +132,12 @@ pub enum TapHoldQuality {
 /// What the backend is currently missing before it can `apply()` anything.
 /// `Granted` means it's ready to go; `Required(_)` lists the missing pieces
 /// so the UI can render deep-links instead of generic "permission denied".
+///
+/// Wire shape (adjacently tagged so the variants serialise predictably):
+/// - `{"kind": "granted"}`
+/// - `{"kind": "required", "permissions": [{"type": "input_monitoring", ...}]}`
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", content = "permissions", rename_all = "snake_case")]
 pub enum PermissionStatus {
     Granted,
     Required(Vec<RequiredPermission>),
