@@ -66,6 +66,14 @@ embedded-ui = ["dep:rust-embed", "dep:mime_guess"]
 # asset at compile time; set KANATA_VERSION env var to override (default v1.11.0).
 bundled-kanata = []
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# v0.2.0 macOS native backend (RFC 0001). Off the default routing path in M0 —
+# the trait wrapper exists in `src/backend/macos_native.rs` for forward
+# compatibility, but the daemon still routes through kanata. Wired in fully
+# by M4.
+hhkb-macos-native = { path = "../hhkb-macos-native" }
+core-foundation = "0.10"
+
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["signal"] }
 
