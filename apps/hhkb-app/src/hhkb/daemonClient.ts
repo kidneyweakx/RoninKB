@@ -369,6 +369,7 @@ export class DaemonClient {
       pid?: number;
       input_monitoring_granted?: boolean | null;
       driver_activated?: boolean | null;
+      driver_state?: KanataDriverState | null;
       last_error?: string | null;
       stderr_tail?: string[];
       device_path?: string | null;
@@ -381,10 +382,36 @@ export class DaemonClient {
       pid: raw.pid,
       inputMonitoringGranted: raw.input_monitoring_granted ?? null,
       driverActivated: raw.driver_activated ?? null,
+      driverState: raw.driver_state ?? null,
       lastError: raw.last_error ?? null,
       stderrTail: raw.stderr_tail ?? [],
       devicePath: raw.device_path ?? null,
     };
+  }
+
+  /**
+   * Trigger the Karabiner DriverKit sysext registration. macOS-only.
+   * Returns the outcome (`triggered` / `already_activated` /
+   * `karabiner_not_installed`) plus the driver state observed immediately
+   * after. The user still has to confirm the sysext in System Settings on
+   * the `triggered` path — the daemon just kicks off the prompt.
+   */
+  async kanataDriverActivate(): Promise<KanataDriverActivateResult> {
+    return requestJson<KanataDriverActivateResult>(
+      `${this.baseUrl}/kanata/driver/activate`,
+      { method: 'POST' },
+    );
+  }
+
+  /**
+   * Open System Settings -> Privacy & Security -> Driver Extensions, deep-linked
+   * to the Karabiner sysext row. macOS-only.
+   */
+  async kanataDriverOpenSettings(): Promise<void> {
+    await requestJson<unknown>(
+      `${this.baseUrl}/kanata/driver/open-settings`,
+      { method: 'POST' },
+    );
   }
 
   /** Spawn a new kanata child. Fails if already running or no binary. */
@@ -508,6 +535,38 @@ export interface BleScanStartedResponse {
   message: string;
 }
 
+/**
+ * Granular Karabiner DriverKit sysext state, mirrored from the daemon's
+ * `DriverState` enum. `null` on non-macOS or when the daemon couldn't tell.
+ *
+ * - `activated` — sysext is `[activated enabled]`; ready to use.
+ * - `waiting_for_user` — sysext is registered but pending OS approval; the
+ *   user has to flip it on in System Settings.
+ * - `not_registered` — Karabiner-Elements is installed but the sysext has
+ *   never been registered; the daemon can trigger registration via
+ *   `kanataDriverActivate()`.
+ * - `karabiner_not_installed` — `/Applications/Karabiner-Elements.app` is
+ *   absent. Direct the user to install it (or switch backend on macOS).
+ * - `unknown` — `systemextensionsctl` itself didn't run; treat as "let
+ *   kanata try, surface whatever error it reports".
+ */
+export type KanataDriverState =
+  | 'activated'
+  | 'waiting_for_user'
+  | 'not_registered'
+  | 'karabiner_not_installed'
+  | 'unknown';
+
+export type KanataDriverActivateOutcome =
+  | 'triggered'
+  | 'already_activated'
+  | 'karabiner_not_installed';
+
+export interface KanataDriverActivateResult {
+  result: KanataDriverActivateOutcome;
+  driver_state: KanataDriverState;
+}
+
 export interface KanataStatus {
   installed: boolean;
   binaryPath?: string;
@@ -520,9 +579,15 @@ export interface KanataStatus {
    * macOS-only. `true` when Karabiner-DriverKit-VirtualHIDDevice is
    * `[activated enabled]`. `false` means the user still has to approve the
    * sysext in System Settings. `null` on other platforms or when the daemon
-   * couldn't determine the state.
+   * couldn't determine the state. Kept for backwards-compat; new UI should
+   * read `driverState` for the granular flavour.
    */
   driverActivated?: boolean | null;
+  /**
+   * macOS-only granular flavour of `driverActivated`. See [`KanataDriverState`].
+   * `null` on non-macOS.
+   */
+  driverState?: KanataDriverState | null;
   lastError?: string | null;
   stderrTail?: string[];
   devicePath?: string | null;

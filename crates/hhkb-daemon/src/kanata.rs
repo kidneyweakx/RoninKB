@@ -192,6 +192,61 @@ pub enum KanataStatus {
     Running { pid: u32 },
 }
 
+/// Granular state of the macOS Karabiner-DriverKit-VirtualHIDDevice sysext.
+///
+/// We split the formerly-bool driver state into the four cases that need
+/// different remediation in the UI. `Unknown` is reserved for the case where
+/// `systemextensionsctl` itself can't run (PATH issue, stripped install) and
+/// the daemon can't decide; the UI treats it as "let kanata try and surface
+/// the real failure".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DriverState {
+    /// Sysext is `[activated enabled]`. Kanata can grab the keyboard.
+    Activated,
+    /// Sysext is registered but the user hasn't approved it yet (e.g.
+    /// `[activated waiting for user]`). Open System Settings to fix.
+    WaitingForUser,
+    /// Karabiner-Elements is installed but the sysext was never registered.
+    /// Run `Karabiner-VirtualHIDDevice-Manager activate` to register.
+    NotRegistered,
+    /// `/Applications/Karabiner-Elements.app` is not installed at all.
+    /// Direct the user to install it.
+    KarabinerNotInstalled,
+    /// `systemextensionsctl` couldn't run; status is undetermined.
+    Unknown,
+}
+
+impl DriverState {
+    /// Backwards-compatible projection: `Activated -> Some(true)`,
+    /// `Unknown -> None`, everything else -> `Some(false)`. Existing
+    /// `/kanata/status` clients that read `driver_activated` keep working.
+    pub fn as_bool(self) -> Option<bool> {
+        match self {
+            DriverState::Activated => Some(true),
+            DriverState::Unknown => None,
+            DriverState::WaitingForUser
+            | DriverState::NotRegistered
+            | DriverState::KarabinerNotInstalled => Some(false),
+        }
+    }
+}
+
+/// Outcome of `KanataManager::driver_activate`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum DriverActivateResult {
+    /// `Karabiner-VirtualHIDDevice-Manager activate` was invoked successfully.
+    /// The user still has to confirm the sysext in System Settings; the daemon
+    /// will see `WaitingForUser` -> `Activated` once they do.
+    Triggered,
+    /// Karabiner-Elements isn't installed; nothing to invoke. UI should send
+    /// the user to the install instructions.
+    KarabinerNotInstalled,
+    /// Already `[activated enabled]` — no-op.
+    AlreadyActivated,
+}
+
 /// Manages the kanata child process + on-disk config file.
 pub struct KanataManager {
     binary_path: Option<PathBuf>,
@@ -292,21 +347,105 @@ impl KanataManager {
             .clone()
     }
 
-    /// macOS Karabiner-DriverKit-VirtualHIDDevice activation status.
-    ///
-    /// Returns `Some(true)` if the system extension is `[activated enabled]`,
-    /// `Some(false)` if it's missing or stuck in `[activated waiting for user]`,
-    /// and `None` on non-macOS targets or when `systemextensionsctl` cannot be
-    /// reached. Cheap to call (one short-lived child process per call); the
-    /// status handler invokes it on every poll.
+    /// macOS Karabiner-DriverKit-VirtualHIDDevice activation status (legacy
+    /// bool projection of [`Self::driver_state`]). Kept so existing clients
+    /// reading `driver_activated` from `/kanata/status` keep working.
     pub fn driver_activated(&self) -> Option<bool> {
+        self.driver_state().as_bool()
+    }
+
+    /// Granular Karabiner DriverKit sysext state. See [`DriverState`].
+    ///
+    /// Cheap to call (one short-lived `systemextensionsctl list` per call,
+    /// plus a stat on `/Applications/Karabiner-Elements.app`). Returns
+    /// [`DriverState::Unknown`] on non-macOS or when the check itself
+    /// couldn't run.
+    pub fn driver_state(&self) -> DriverState {
         #[cfg(target_os = "macos")]
         {
-            macos_driver_activated()
+            macos_driver_state()
         }
         #[cfg(not(target_os = "macos"))]
         {
-            None
+            DriverState::Unknown
+        }
+    }
+
+    /// Trigger sysext registration via Karabiner's bundled CLI. macOS-only.
+    ///
+    /// Runs `Karabiner-VirtualHIDDevice-Manager activate` from inside the
+    /// installed Karabiner bundle. The OS surfaces a "system extension blocked"
+    /// prompt; the user still has to approve it in System Settings → Privacy
+    /// & Security → Driver Extensions, but at least the prompt now appears.
+    ///
+    /// Returns [`DriverActivateResult::KarabinerNotInstalled`] if the manager
+    /// binary isn't on disk. On non-macOS, always returns the same.
+    pub fn driver_activate(&self) -> Result<DriverActivateResult, ApiError> {
+        #[cfg(target_os = "macos")]
+        {
+            // Re-use the cheap state check so we don't fire the activate
+            // command needlessly when the sysext is already enabled.
+            match macos_driver_state() {
+                DriverState::Activated => return Ok(DriverActivateResult::AlreadyActivated),
+                DriverState::KarabinerNotInstalled => {
+                    return Ok(DriverActivateResult::KarabinerNotInstalled);
+                }
+                _ => {}
+            }
+            let manager = std::path::Path::new(KARABINER_MANAGER_BIN);
+            if !manager.is_file() {
+                return Ok(DriverActivateResult::KarabinerNotInstalled);
+            }
+            // The manager activate request must be initiated by a process
+            // visible to the system extension subsystem — running it as the
+            // current user is fine; the OS handles the privilege escalation
+            // dialogs itself.
+            let status = Command::new(manager)
+                .arg("activate")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map_err(|e| {
+                    ApiError::Internal(format!("spawn Karabiner-VirtualHIDDevice-Manager: {e}"))
+                })?;
+            if !status.success() {
+                return Err(ApiError::Internal(format!(
+                    "Karabiner-VirtualHIDDevice-Manager activate exited {status}"
+                )));
+            }
+            Ok(DriverActivateResult::Triggered)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Ok(DriverActivateResult::KarabinerNotInstalled)
+        }
+    }
+
+    /// Open System Settings → Privacy & Security → Driver Extensions so the
+    /// user can toggle the Karabiner sysext on. macOS-only; no-op elsewhere.
+    pub fn driver_open_settings(&self) -> Result<(), ApiError> {
+        #[cfg(target_os = "macos")]
+        {
+            // The `extensionPointIdentifier` query string highlights the right
+            // row in the Driver Extensions list; without it the pane opens
+            // generically.
+            let url = "x-apple.systempreferences:com.apple.LoginItems-Settings.extension?\
+                extensionPointIdentifier=com.apple.system_extension.driver_extension";
+            Command::new("open")
+                .arg(url)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map_err(|e| ApiError::Internal(format!("open System Settings: {e}")))?;
+            Ok(())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Err(ApiError::Internal(
+                "open-settings is macOS-only".to_string(),
+            ))
         }
     }
 
@@ -380,16 +519,16 @@ impl KanataManager {
         // macOS preflight: kanata can't open the virtual HID device unless the
         // Karabiner-DriverKit-VirtualHIDDevice system extension is activated.
         // Surface this as a structured error so the UI can show a setup wizard
-        // instead of silently spamming spawn-fail-respawn.
+        // instead of silently spamming spawn-fail-respawn. We tailor the
+        // message to the driver state so the wizard can guide the user to the
+        // correct next action without parsing the string.
         #[cfg(target_os = "macos")]
-        if let Some(false) = macos_driver_activated() {
-            let msg = "Karabiner-DriverKit-VirtualHIDDevice is not activated. \
-                       Open /Applications/Karabiner-Elements.app once and approve \
-                       the system extension prompt in System Settings → Privacy \
-                       & Security → Login Items & Extensions → Driver Extensions."
-                .to_string();
-            self.set_last_error(Some(msg.clone()));
-            return Err(ApiError::KanataDriverMissing(msg));
+        {
+            let state = macos_driver_state();
+            if let Some(msg) = driver_preflight_message(state) {
+                self.set_last_error(Some(msg.clone()));
+                return Err(ApiError::KanataDriverMissing(msg));
+            }
         }
 
         // NOTE: we deliberately do NOT call `macos_input_monitoring_granted()`
@@ -706,36 +845,104 @@ fn macos_input_monitoring_granted() -> bool {
     unsafe { cg_preflight_listen_event_access() }
 }
 
-/// Parse `systemextensionsctl list` for the Karabiner DriverKit driver. We
-/// look for the bundle id and confirm the trailing `[state]` is exactly
-/// `[activated enabled]` — anything else (e.g. `[activated waiting for user]`,
-/// `[terminated waiting for user]`) means the user still has to approve the
-/// sysext in System Settings before kanata can grab the keyboard.
-///
-/// Returns `None` when the command itself can't run (PATH issue, missing
-/// binary on a stripped-down install). The caller should treat `None` as
-/// "couldn't determine" — let kanata try and surface whatever error it
-/// reports rather than blocking the user on a heuristic.
+/// Map a [`DriverState`] to the preflight error string we surface from
+/// [`KanataManager::start`] when the sysext isn't ready. `None` means we let
+/// start proceed; only `Activated` and `Unknown` qualify (the latter means
+/// we couldn't tell, so we let kanata try and surface the real failure).
 #[cfg(target_os = "macos")]
-fn macos_driver_activated() -> Option<bool> {
-    const BUNDLE_ID: &str = "org.pqrs.Karabiner-DriverKit-VirtualHIDDevice";
-    let output = Command::new("systemextensionsctl")
-        .arg("list")
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
+fn driver_preflight_message(state: DriverState) -> Option<String> {
+    match state {
+        DriverState::Activated | DriverState::Unknown => None,
+        DriverState::WaitingForUser => Some(
+            "Karabiner-DriverKit-VirtualHIDDevice is registered but waiting for your \
+             approval. Open System Settings → Privacy & Security → Login Items & \
+             Extensions → Driver Extensions and toggle Karabiner-DriverKit-VirtualHIDDevice on."
+                .to_string(),
+        ),
+        DriverState::NotRegistered => Some(
+            "Karabiner-DriverKit-VirtualHIDDevice is installed but not registered. \
+             Use the 'Activate driver' button in Settings, or run \
+             `/Applications/.Karabiner-VirtualHIDDevice-Manager.app/Contents/MacOS/\
+             Karabiner-VirtualHIDDevice-Manager activate` once."
+                .to_string(),
+        ),
+        DriverState::KarabinerNotInstalled => Some(
+            "Karabiner-Elements is not installed. The kanata backend on macOS requires \
+             Karabiner-DriverKit-VirtualHIDDevice (shipped with Karabiner-Elements) \
+             to grab the keyboard. Install Karabiner-Elements from \
+             https://karabiner-elements.pqrs.org/ or switch to the macOS native backend."
+                .to_string(),
+        ),
     }
-    // Different macOS versions print the driver-extension category to either
-    // stdout or stderr; check both so we never miss the line.
+}
+
+/// Path to Karabiner-Elements' bundled VirtualHIDDevice manager CLI. This is
+/// what the user is implicitly running when they "open Karabiner-Elements
+/// once" — we just call it directly so the daemon can drive the activation
+/// without bouncing through Karabiner's UI.
+#[cfg(target_os = "macos")]
+const KARABINER_MANAGER_BIN: &str =
+    "/Applications/.Karabiner-VirtualHIDDevice-Manager.app/Contents/MacOS/\
+     Karabiner-VirtualHIDDevice-Manager";
+
+/// Where Karabiner-Elements installs itself. Used as a presence check.
+#[cfg(target_os = "macos")]
+const KARABINER_ELEMENTS_APP: &str = "/Applications/Karabiner-Elements.app";
+
+/// Parse `systemextensionsctl list` for the Karabiner DriverKit driver into
+/// the richer [`DriverState`] enum. Different macOS versions emit the row to
+/// stdout vs stderr; we check both. The trailing `[state]` distinguishes
+/// `[activated enabled]` (good) from `[activated waiting for user]` and the
+/// other intermediate cases.
+///
+/// Returns [`DriverState::Unknown`] when `systemextensionsctl` itself can't
+/// run (PATH issue, stripped install). Callers treat `Unknown` as "couldn't
+/// determine" and let kanata try, surfacing the real error if any.
+#[cfg(target_os = "macos")]
+fn macos_driver_state() -> DriverState {
+    const BUNDLE_ID: &str = "org.pqrs.Karabiner-DriverKit-VirtualHIDDevice";
+
+    let karabiner_present = std::path::Path::new(KARABINER_ELEMENTS_APP).exists();
+
+    let Ok(output) = Command::new("systemextensionsctl").arg("list").output() else {
+        // We can't tell if the sysext is installed, but absence of the parent
+        // app is still informative — surface that to the UI.
+        return if karabiner_present {
+            DriverState::Unknown
+        } else {
+            DriverState::KarabinerNotInstalled
+        };
+    };
+    if !output.status.success() {
+        return if karabiner_present {
+            DriverState::Unknown
+        } else {
+            DriverState::KarabinerNotInstalled
+        };
+    }
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     for line in stdout.lines().chain(stderr.lines()) {
         if line.contains(BUNDLE_ID) {
-            return Some(line.contains("[activated enabled]"));
+            if line.contains("[activated enabled]") {
+                return DriverState::Activated;
+            }
+            // Any other state (`[activated waiting for user]`,
+            // `[terminated waiting for user]`, etc.) means the sysext is
+            // registered but the OS hasn't enabled it — i.e. the user has to
+            // approve it.
+            return DriverState::WaitingForUser;
         }
     }
-    Some(false)
+    // Bundle id not in the list at all. If Karabiner-Elements isn't even
+    // installed, that's the more useful state to report; otherwise the user
+    // has Karabiner but the sysext was never registered (rare; happens on
+    // partial uninstalls or fresh installs that haven't been launched yet).
+    if karabiner_present {
+        DriverState::NotRegistered
+    } else {
+        DriverState::KarabinerNotInstalled
+    }
 }
 
 #[cfg(target_os = "macos")]

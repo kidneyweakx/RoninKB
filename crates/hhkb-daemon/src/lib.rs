@@ -75,6 +75,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/kanata/reload", post(routes::kanata::reload))
         .route("/kanata/config", get(routes::kanata::get_config))
         .route("/kanata/reveal", post(routes::kanata::reveal))
+        .route(
+            "/kanata/driver/activate",
+            post(routes::kanata::driver_activate),
+        )
+        .route(
+            "/kanata/driver/open-settings",
+            post(routes::kanata::driver_open_settings),
+        )
         // -- Flow (cross-device clipboard sync) ---------------------------
         .route(
             "/flow/config",
