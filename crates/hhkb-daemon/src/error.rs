@@ -67,6 +67,17 @@ pub enum ApiError {
     /// detect that they need to switch via `/backend/select` first.
     #[error("backend kanata is not active (current: {active})")]
     BackendInactive { active: String },
+
+    /// The active backend can't apply the profile because OS-level
+    /// permissions (Input Monitoring, Accessibility, sysext) are missing.
+    /// Returned as 503 with the missing-permission list so the UI can
+    /// render the right deep-links — same shape as `/backend/list`'s
+    /// `permission_status.required.permissions`.
+    #[error("backend {backend} is not ready (missing permissions)")]
+    BackendNotReady {
+        backend: String,
+        missing: serde_json::Value,
+    },
 }
 
 impl From<anyhow::Error> for ApiError {
@@ -83,6 +94,20 @@ impl From<tokio::task::JoinError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        // Pull the BackendInactive `active` field out before the match so we
+        // can emit the optional `next_action` body field below without
+        // re-matching. None for every other variant.
+        let backend_inactive_active = match &self {
+            ApiError::BackendInactive { active } => Some(active.clone()),
+            _ => None,
+        };
+        let backend_not_ready = match &self {
+            ApiError::BackendNotReady { backend, missing } => {
+                Some((backend.clone(), missing.clone()))
+            }
+            _ => None,
+        };
+
         let (status, code) = match &self {
             ApiError::DeviceUnavailable => (StatusCode::SERVICE_UNAVAILABLE, "device_unavailable"),
             ApiError::Device(_) => (StatusCode::INTERNAL_SERVER_ERROR, "device_error"),
@@ -109,6 +134,9 @@ impl IntoResponse for ApiError {
                 (StatusCode::SERVICE_UNAVAILABLE, "kanata_driver_missing")
             }
             ApiError::BackendInactive { .. } => (StatusCode::CONFLICT, "backend_inactive"),
+            ApiError::BackendNotReady { .. } => {
+                (StatusCode::SERVICE_UNAVAILABLE, "backend_not_ready")
+            }
             ApiError::Flow(e) => match e {
                 crate::flow::FlowError::Disabled => {
                     (StatusCode::SERVICE_UNAVAILABLE, "flow_disabled")
@@ -122,10 +150,33 @@ impl IntoResponse for ApiError {
             },
         };
 
-        let body = Json(json!({
-            "error": code,
-            "message": self.to_string(),
-        }));
+        let body = if let Some(active) = backend_inactive_active {
+            // RFC 0001 §10 contract: the 409 carries enough information for a
+            // v0.1.x client to recover automatically — `active` names the
+            // backend that owns the keyboard right now, and `next_action`
+            // points at the canonical fix (`POST /backend/select`).
+            Json(json!({
+                "error": code,
+                "message": self.to_string(),
+                "active": active,
+                "next_action": "POST /backend/select with {\"id\":\"kanata\"}",
+            }))
+        } else if let Some((backend, missing)) = backend_not_ready {
+            // 503 carries the missing permission list verbatim so the UI can
+            // render Open-System-Settings deep links without an extra round
+            // trip to /backend/list.
+            Json(json!({
+                "error": code,
+                "message": self.to_string(),
+                "backend": backend,
+                "missing": missing,
+            }))
+        } else {
+            Json(json!({
+                "error": code,
+                "message": self.to_string(),
+            }))
+        };
 
         (status, body).into_response()
     }
