@@ -6,6 +6,8 @@
 //! `SYNTHETIC_USER_DATA` in the `kCGEventSourceUserData` field; the tap
 //! callback ignores them so we don't recurse into our own injection.
 
+use std::collections::BTreeSet;
+use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex};
 
 use core_foundation::runloop::CFRunLoop;
@@ -54,10 +56,22 @@ pub type EventCallback = dyn FnMut(ObservedEvent) -> Verdict + Send + 'static;
 /// The tap callback runs on this same thread. Make sure the callback returns
 /// quickly — the system gives us a budget of a few milliseconds before it
 /// disables the tap.
+///
+/// Resilience guarantees:
+/// - Callback panics are caught (`catch_unwind`) so a buggy user callback
+///   doesn't tear down the tap thread mid-event.
+/// - Mutex poisoning is recovered with `into_inner()` instead of `expect()`
+///   so a one-time panic doesn't permanently freeze the tap.
+/// - `FlagsChanged` events are disambiguated into press/release by tracking
+///   the set of currently-pressed modifier usages locally. The OS only
+///   tells us "this modifier transitioned"; without this state we'd emit
+///   two presses in a row for tap-then-release.
 pub fn install_and_run(callback: Box<EventCallback>) -> Result<()> {
     let cb = Arc::new(Mutex::new(callback));
+    let mod_state = Arc::new(Mutex::new(BTreeSet::<HidUsage>::new()));
 
     let cb_for_tap = Arc::clone(&cb);
+    let mod_state_for_tap = Arc::clone(&mod_state);
     let result = CGEventTap::with_enabled(
         CGEventTapLocation::Session,
         CGEventTapPlacement::HeadInsertEventTap,
@@ -76,16 +90,30 @@ pub fn install_and_run(callback: Box<EventCallback>) -> Result<()> {
 
             let cg_keycode =
                 event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
-            let observed = decode(ev_type, cg_keycode);
+            let observed = decode_with_modifier_state(ev_type, cg_keycode, &mod_state_for_tap);
 
-            let verdict = {
-                let mut guard = cb_for_tap.lock().expect("event-tap callback poisoned");
+            // Run the user callback under catch_unwind so a panic doesn't
+            // propagate into the tap thread (which would then unwind through
+            // the C boundary — undefined behaviour). On panic we keep the
+            // event and log; the daemon's tap thread keeps running.
+            let cb_arc = Arc::clone(&cb_for_tap);
+            let verdict = std::panic::catch_unwind(AssertUnwindSafe(move || {
+                let mut guard = cb_arc.lock().unwrap_or_else(|p| {
+                    tracing::warn!("event-tap callback mutex was poisoned; recovering");
+                    p.into_inner()
+                });
                 (guard)(observed)
-            };
+            }));
 
             match verdict {
-                Verdict::PassThrough => CallbackResult::Keep,
-                Verdict::Suppress => CallbackResult::Drop,
+                Ok(Verdict::PassThrough) => CallbackResult::Keep,
+                Ok(Verdict::Suppress) => CallbackResult::Drop,
+                Err(_) => {
+                    tracing::error!(
+                        "event-tap user callback panicked; passing event through to avoid drop"
+                    );
+                    CallbackResult::Keep
+                }
             }
         },
         || {
@@ -99,7 +127,18 @@ pub fn install_and_run(callback: Box<EventCallback>) -> Result<()> {
     }
 }
 
-fn decode(ev_type: CGEventType, cg_keycode: u16) -> ObservedEvent {
+/// Decode a CGEvent into an ObservedEvent.
+///
+/// For `KeyDown` / `KeyUp` the press/release direction is unambiguous. For
+/// `FlagsChanged` we consult the locally-tracked modifier set: if the
+/// usage is already in the set this is a release; otherwise a press. The
+/// OS emits one FlagsChanged per modifier transition, so this round-trips
+/// without us reading the CGEvent flags field.
+fn decode_with_modifier_state(
+    ev_type: CGEventType,
+    cg_keycode: u16,
+    mod_state: &Arc<Mutex<BTreeSet<HidUsage>>>,
+) -> ObservedEvent {
     let kind = match ev_type {
         CGEventType::KeyDown => ObservedKind::KeyDown,
         CGEventType::KeyUp => ObservedKind::KeyUp,
@@ -119,11 +158,18 @@ fn decode(ev_type: CGEventType, cg_keycode: u16) -> ObservedEvent {
     match (kind, hid) {
         (ObservedKind::KeyDown, h) => ObservedEvent::Pressed(h),
         (ObservedKind::KeyUp, h) => ObservedEvent::Released(h),
-        // For modifier keys (FlagsChanged), the tap doesn't tell us press vs
-        // release directly. We treat every FlagsChanged as a toggle on the
-        // observed key — the engine reconciles the actual state via its
-        // internal pressed-set. The OS emits one FlagsChanged per modifier
-        // transition, so this round-trips.
-        (ObservedKind::FlagsChanged, h) => ObservedEvent::Pressed(h),
+        (ObservedKind::FlagsChanged, h) => {
+            let mut state = mod_state.lock().unwrap_or_else(|p| {
+                tracing::warn!("event-tap modifier-state mutex was poisoned; recovering");
+                p.into_inner()
+            });
+            if state.contains(&h) {
+                state.remove(&h);
+                ObservedEvent::Released(h)
+            } else {
+                state.insert(h);
+                ObservedEvent::Pressed(h)
+            }
+        }
     }
 }

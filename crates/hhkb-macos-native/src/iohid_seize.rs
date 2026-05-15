@@ -188,9 +188,24 @@ impl SeizeManager {
                 let ret = IOHIDDeviceOpen(device, kIOHIDOptionsTypeSeizeDevice);
                 if ret != kIOReturnSuccess {
                     if ret == kIOReturnNotPermitted {
-                        // Drop the manager; surface the permission error.
+                        // Surface the permission error. Release every CF
+                        // resource we created so far so this error path
+                        // doesn't leak: the manager itself, the device set
+                        // we copied, every previously-seized device's
+                        // retain, and the callback state box.
+                        for d in seized_devices.drain(..) {
+                            let _ = io_kit_sys::hid::device::IOHIDDeviceClose(
+                                d,
+                                kIOHIDOptionsTypeSeizeDevice,
+                            );
+                            CFRelease(d as CFTypeRef);
+                        }
                         let _ = Box::from_raw(state);
                         CFRelease(device_set as CFTypeRef);
+                        let _ = io_kit_sys::hid::manager::IOHIDManagerClose(
+                            manager,
+                            kIOHIDManagerOptionNone,
+                        );
                         CFRelease(manager as CFTypeRef);
                         return Err(Error::IoHidSeizeFailed {
                             device: kind.product.clone(),
@@ -300,9 +315,16 @@ unsafe extern "C" fn input_report_trampoline(
     let bytes = unsafe { std::slice::from_raw_parts(report, len) };
 
     let device_key = sender as usize;
+    // Mutex poisoning: a panic in our own callback (or a panic that crossed
+    // a `catch_unwind` elsewhere in the daemon) would leave the mutex
+    // poisoned. The stored state is still meaningful, so we recover with
+    // `into_inner()` instead of bailing.
     let mut prev_guard = match state.prev_state.lock() {
         Ok(g) => g,
-        Err(_) => return,
+        Err(p) => {
+            tracing::warn!("iohid_seize prev_state mutex was poisoned; recovering");
+            p.into_inner()
+        }
     };
     let prev = match prev_guard.iter().position(|(k, _)| *k == device_key) {
         Some(idx) => prev_guard[idx].1,
@@ -325,11 +347,20 @@ unsafe extern "C" fn input_report_trampoline(
     drop(prev_guard);
 
     if !events.is_empty() {
-        if let Ok(mut cb) = state.user_cb.lock() {
+        let mut cb = match state.user_cb.lock() {
+            Ok(g) => g,
+            Err(p) => {
+                tracing::warn!("iohid_seize user_cb mutex was poisoned; recovering");
+                p.into_inner()
+            }
+        };
+        // catch_unwind so a panic in the user callback doesn't propagate
+        // through the C trampoline (UB).
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             for ev in events {
                 cb(ev);
             }
-        }
+        }));
     }
 }
 

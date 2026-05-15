@@ -159,6 +159,49 @@ pub struct Engine {
     /// via [`Engine::is_owned`] to decide between Suppress + route-to-engine
     /// and PassThrough.
     owned: BTreeSet<HidUsage>,
+    /// Raw heap pointers we handed to keyberon via `Box::leak` so its
+    /// `Layout<'static>` can hold static references. We own them logically;
+    /// `Drop` rebuilds the `Box`es and frees the memory so long-running
+    /// daemons that hot-swap profiles don't grow without bound.
+    ///
+    /// Safety invariant: these pointers are only valid for the lifetime of
+    /// this `Engine`. Because keyberon's `Layout` is parameterised on
+    /// `'static` we cannot tie the lifetime to `Engine`'s type, so we
+    /// instead enforce the invariant manually: the pointers are dropped
+    /// exactly once in `Drop` and nothing else aliases them.
+    layers_raw: *mut [LayerArr; 1],
+    src_keys_raw: *mut [Action<'static, Infallible>; COLS],
+    /// `HoldTapAction`s leaked when constructing this engine, in the order
+    /// they were emitted by [`Engine::from_grid`]. Reclaimed in `Drop`.
+    holdtap_raw: Vec<*mut HoldTapAction<'static, Infallible>>,
+}
+
+// SAFETY: the raw pointers are only ever touched from the thread that owns
+// the `Engine`, and `keyberon::Layout` is Send + Sync. The daemon's tap/tick
+// threads share `Arc<Mutex<Engine>>` so all accesses serialise behind the
+// mutex.
+unsafe impl Send for Engine {}
+unsafe impl Sync for Engine {}
+
+impl Drop for Engine {
+    fn drop(&mut self) {
+        // SAFETY: every pointer here came from `Box::leak(Box::new(...))` in
+        // `from_grid`. We rebuild the boxes and let them drop normally.
+        // `Layout` is dropped first (it doesn't free its backing storage,
+        // since it only holds references), so by the time we get here no
+        // outside code is referring to the leaked allocations.
+        unsafe {
+            for p in self.holdtap_raw.drain(..) {
+                drop(Box::from_raw(p));
+            }
+            if !self.layers_raw.is_null() {
+                drop(Box::from_raw(self.layers_raw));
+            }
+            if !self.src_keys_raw.is_null() {
+                drop(Box::from_raw(self.src_keys_raw));
+            }
+        }
+    }
 }
 
 impl Engine {
@@ -203,6 +246,7 @@ impl Engine {
     pub fn from_grid(grid: [[KeyAction; COLS]; ROWS]) -> Self {
         let mut owned = BTreeSet::new();
         let mut layer: LayerArr = std::array::from_fn(|_| std::array::from_fn(|_| Action::NoOp));
+        let mut holdtap_raw: Vec<*mut HoldTapAction<'static, Infallible>> = Vec::new();
 
         for (r, row) in grid.iter().enumerate() {
             for (c, action) in row.iter().enumerate() {
@@ -235,8 +279,12 @@ impl Engine {
                         tap,
                         hold,
                     } => {
-                        let holdtap: &'static HoldTapAction<'static, Infallible> =
-                            Box::leak(Box::new(HoldTapAction {
+                        // keyberon's `Layout<'static>` requires a static
+                        // reference to the HoldTapAction. We allocate on
+                        // the heap and stash the raw pointer so `Drop`
+                        // reclaims it — see the `Drop` impl above.
+                        let raw: *mut HoldTapAction<'static, Infallible> =
+                            Box::into_raw(Box::new(HoldTapAction {
                                 timeout: timeout_ms,
                                 hold: Action::KeyCode(hold),
                                 tap: Action::KeyCode(tap),
@@ -245,16 +293,25 @@ impl Engine {
                                 tap_hold_interval: 0,
                                 on_press_reset_timeout_to: None,
                             }));
+                        // SAFETY: raw was just freshly allocated; the
+                        // reference lives until `Drop` reclaims it.
+                        let holdtap: &'static HoldTapAction<'static, Infallible> = unsafe { &*raw };
                         layer[r][c] = Action::HoldTap(holdtap);
+                        holdtap_raw.push(raw);
                         owned.insert(src_hid);
                     }
                 }
             }
         }
 
-        let layers: &'static [LayerArr; 1] = Box::leak(Box::new([layer]));
-        let src_keys: &'static [Action<'static, Infallible>; COLS] =
-            Box::leak(Box::new(std::array::from_fn(|_| Action::NoOp)));
+        // Same trick as above for the layers + src_keys arrays. These are
+        // freed in `Drop`, so hot-swapping engines no longer leaks per-swap.
+        let layers_raw: *mut [LayerArr; 1] = Box::into_raw(Box::new([layer]));
+        let src_keys_raw: *mut [Action<'static, Infallible>; COLS] =
+            Box::into_raw(Box::new(std::array::from_fn(|_| Action::NoOp)));
+        // SAFETY: both pointers were just freshly allocated.
+        let layers: &'static [LayerArr; 1] = unsafe { &*layers_raw };
+        let src_keys: &'static [Action<'static, Infallible>; COLS] = unsafe { &*src_keys_raw };
 
         let layout = Layout::new_with_trans_action_settings(
             src_keys, layers, /* trans_v2 */ true, false,
@@ -264,6 +321,9 @@ impl Engine {
             layout,
             last_active: BTreeSet::new(),
             owned,
+            layers_raw,
+            src_keys_raw,
+            holdtap_raw,
         }
     }
 
