@@ -1,9 +1,10 @@
 # M1 Kill-Switch Validation — Hardware-in-Loop Test Plan
 
-| Status   | Deferred (hardware required)                                  |
+| Status   | Runnable — awaiting a hardware-in-loop run                     |
 | -------- | ------------------------------------------------------------- |
 | Owner    | Whoever has a Mac + an external HHKB at the time              |
 | Related  | [`docs/v0.2.0-plan.md` §M1](v0.2.0-plan.md), [`docs/rfc-0001-macos-native-backend.md` §9](rfc-0001-macos-native-backend.md), [`docs/rfc-0001-macos-native-backend.md` §12 R1](rfc-0001-macos-native-backend.md) |
+| Tooling  | [`scripts/measure-tap-latency.sh`](../scripts/measure-tap-latency.sh), [`docs/fixtures/m1-default.json`](fixtures/m1-default.json), [`docs/fixtures/m1-homerow.json`](fixtures/m1-homerow.json) |
 
 The plan's M1 milestone has a kill-switch criterion (plan §3.M1):
 
@@ -18,6 +19,17 @@ Until someone with that setup runs it and records results, the M1
 kill-switch decision stays "tentatively passing" — the engine's unit
 tests cover the state-machine correctness, but not the
 sub-300ms-under-load part.
+
+The tooling is now in-tree: [`scripts/measure-tap-latency.sh`](../scripts/measure-tap-latency.sh)
+parses daemon trace logs into latency stats and asserts the kill-switch
+thresholds, [`docs/fixtures/m1-default.json`](fixtures/m1-default.json)
+is the Caps→Esc/LCtrl HoldTap profile for Test 1, and
+[`docs/fixtures/m1-homerow.json`](fixtures/m1-homerow.json) is the
+home-row-mods profile for Test 2. The daemon's `MacosNativeBackend`
+emits structured `phase=rx` / `phase=tx` trace events on the
+`hhkb_daemon::backend::macos_native::latency` target so the script can
+compute `tx.t_us - rx.t_us` per pair without depending on tap-callback
+log scraping.
 
 ## What we're measuring
 
@@ -45,29 +57,55 @@ sub-300ms-under-load part.
 4. **Pin the backend.**
    `curl -X POST localhost:7331/backend/select -d '{"id":"macos-native"}'`.
 5. **Apply a known profile.** Default Caps→Ctrl/Esc HoldTap with
-   `timeout_ms: 200`. Use the wizard or the test profile committed at
-   `docs/fixtures/m1-default.json` (TODO when this is added).
+   `timeout_ms: 200`. Either drive the wizard or POST the fixture
+   directly:
+
+   ```bash
+   curl -X POST http://127.0.0.1:7331/profiles \
+     -H 'Content-Type: application/json' \
+     -d @docs/fixtures/m1-default.json
+   # …then activate it via the response's profile id…
+   curl -X POST http://127.0.0.1:7331/profiles/active \
+     -H 'Content-Type: application/json' \
+     -d '{"id":"<id from the create response>"}'
+   ```
 
 ## Test 1 — Tap-hold latency
 
 The cheapest measurement that doesn't require a logic analyzer is the
-event-tap timestamp delta. We record:
+event-tap timestamp delta. The daemon emits two structured trace events
+per owned-key transition:
 
-- `t0` = the original Caps Lock press, captured by the daemon's tap
-  callback (already logged at `tracing::debug` in `event_tap.rs`).
-- `t1` = the re-injected Esc press, posted by the engine tick thread.
+- `phase = "rx"` — the original Caps Lock press/release observed by the
+  CGEventTap callback (`hhkb-daemon/src/backend/macos_native.rs`, tap
+  thread).
+- `phase = "tx"` — the re-injected Esc press posted by the engine tick
+  thread.
 
-Both timestamps are `mach_absolute_time` based, monotonic, and read
-inside the daemon process — so the delta is the engine's contribution
-to latency, not OS HID-stack noise.
+Both timestamps come from a shared `Instant` origin captured at
+`apply()` time. `Instant` is backed by `CLOCK_MONOTONIC_RAW` on macOS,
+so `tx.t_us - rx.t_us` is real wall-clock microseconds within the
+daemon process — the delta is the engine's contribution to latency,
+not OS HID-stack noise.
 
 Procedure:
 
-1. Run the daemon with `RUST_LOG=hhkb_daemon=trace,hhkb_macos_native=trace`.
+1. Run the daemon with `RUST_LOG=hhkb_daemon=trace`. Stderr should
+   start emitting `hhkb_daemon::backend::macos_native::latency` lines
+   once an owned key fires.
 2. Tap Caps Lock 100 times with a steady ~1 Hz rhythm.
-3. Pipe the log into `scripts/measure-tap-latency.sh` (TODO: write
-   this) which extracts `(t0, t1)` pairs and reports min / median /
-   p95 / p99 / max.
+3. Pipe the captured stderr into the latency script:
+
+   ```bash
+   RUST_LOG=hhkb_daemon=trace cargo run -p hhkb-daemon 2> daemon.log
+   # …tap Caps Lock 100 times…
+   scripts/measure-tap-latency.sh < daemon.log
+   ```
+
+   The script pairs each `tx` line with the most recent unconsumed
+   `rx` line and reports `samples / min / median / mean / p95 / p99 /
+   max` in milliseconds, then asserts the kill-switch criterion below.
+   Exit code is `1` on FAIL, `0` on PASS, `2` if no pairs were found.
 
 **Pass criterion:** p99 < 250ms; max < 300ms (matches plan §3.M1
 ceiling).
@@ -81,10 +119,9 @@ descoping the native backend per plan §2 risk.
 
 Procedure:
 
-1. Configure a home-row-mod profile (Caps→Ctrl/Esc + `a`→hold-LSft,
-   `s`→hold-LCtl, etc.) — we don't ship one by default, but
-   `bindings:` JSON now supports it. Sample profile to be added at
-   `docs/fixtures/m1-homerow.json`.
+1. POST [`docs/fixtures/m1-homerow.json`](fixtures/m1-homerow.json) and
+   activate it (Caps→Esc/LCtrl plus `a`→hold-LSft, `s`→hold-LCtl,
+   `d`→hold-LAlt, `f`→hold-LGui — all `timeout_ms: 200`).
 2. Open a typing test page (monkeytype.com works well). Pick a
    word-list that produces ~120 WPM for the tester.
 3. Type for 5 minutes. Count misfires manually — a misfire is any

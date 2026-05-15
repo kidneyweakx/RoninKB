@@ -20,7 +20,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use core_foundation::runloop::CFRunLoop;
 use hhkb_core::ViaProfile;
@@ -179,20 +179,49 @@ impl Backend for MacosNativeBackend {
         let engine = Arc::new(Mutex::new(new_engine));
         let tap_runloop: Arc<Mutex<Option<CFRunLoop>>> = Arc::new(Mutex::new(None));
 
+        // Shared monotonic origin so the tap thread's `rx` logs and the tick
+        // thread's `tx` logs share a comparable timeline. `Instant` is backed
+        // by `CLOCK_MONOTONIC_RAW` on macOS, so deltas are real wall-clock
+        // microseconds within this process.
+        let t_origin = Instant::now();
+
         // Tick thread: drains engine output every 1ms, re-injects synthetic
         // press/release events.
+        //
+        // Structured tracing for latency measurement (see
+        // `docs/m1-killswitch-validation.md`): each injected transition logs
+        // `target = "hhkb_daemon::backend::macos_native::latency", phase =
+        // "tx", kind = press|release, usage = <hex>, t_us = <micros since
+        // `t_origin`>`. Pairs with the matching "rx" log from the tap
+        // callback below.
         let tick_engine = Arc::clone(&engine);
         let tick_stop = Arc::clone(&stop);
+        let tick_origin = t_origin;
         let tick_thread = thread::Builder::new()
             .name("hhkb-native-tick".to_string())
             .spawn(move || {
                 while !tick_stop.load(Ordering::Relaxed) {
                     thread::sleep(Duration::from_millis(1));
                     let transitions = {
-                        let mut e = tick_engine.lock().expect("engine poisoned");
+                        let mut e = tick_engine.lock().unwrap_or_else(|p| {
+                            tracing::warn!("macos-native engine mutex was poisoned; recovering");
+                            p.into_inner()
+                        });
                         e.tick().transitions
                     };
                     for t in transitions {
+                        let (kind, usage) = match t {
+                            Transition::Press(u) => ("press", u),
+                            Transition::Release(u) => ("release", u),
+                        };
+                        let t_us = tick_origin.elapsed().as_micros() as u64;
+                        tracing::trace!(
+                            target: "hhkb_daemon::backend::macos_native::latency",
+                            phase = "tx",
+                            kind,
+                            usage = format_args!("0x{:02x}", usage.0),
+                            t_us
+                        );
                         let res = match t {
                             Transition::Press(u) => inject::post_press(u),
                             Transition::Release(u) => inject::post_release(u),
@@ -208,6 +237,7 @@ impl Backend for MacosNativeBackend {
         // Tap thread: installs the CGEventTap and blocks on CFRunLoop::run.
         let tap_engine = Arc::clone(&engine);
         let tap_runloop_set = Arc::clone(&tap_runloop);
+        let tap_origin = t_origin;
         let tap_thread = thread::Builder::new()
             .name("hhkb-native-tap".to_string())
             .spawn(move || {
@@ -220,8 +250,19 @@ impl Backend for MacosNativeBackend {
                 let cb_engine = Arc::clone(&tap_engine);
                 let result = install_and_run(Box::new(move |ev| match ev {
                     ObservedEvent::Pressed(usage) => {
-                        let mut e = cb_engine.lock().expect("engine poisoned");
+                        let mut e = cb_engine.lock().unwrap_or_else(|p| {
+                            tracing::warn!("macos-native engine mutex was poisoned; recovering");
+                            p.into_inner()
+                        });
                         if e.is_owned(usage) {
+                            let t_us = tap_origin.elapsed().as_micros() as u64;
+                            tracing::trace!(
+                                target: "hhkb_daemon::backend::macos_native::latency",
+                                phase = "rx",
+                                kind = "press",
+                                usage = format_args!("0x{:02x}", usage.0),
+                                t_us
+                            );
                             e.input(EngineEvent::Press(usage));
                             Verdict::Suppress
                         } else {
@@ -229,8 +270,19 @@ impl Backend for MacosNativeBackend {
                         }
                     }
                     ObservedEvent::Released(usage) => {
-                        let mut e = cb_engine.lock().expect("engine poisoned");
+                        let mut e = cb_engine.lock().unwrap_or_else(|p| {
+                            tracing::warn!("macos-native engine mutex was poisoned; recovering");
+                            p.into_inner()
+                        });
                         if e.is_owned(usage) {
+                            let t_us = tap_origin.elapsed().as_micros() as u64;
+                            tracing::trace!(
+                                target: "hhkb_daemon::backend::macos_native::latency",
+                                phase = "rx",
+                                kind = "release",
+                                usage = format_args!("0x{:02x}", usage.0),
+                                t_us
+                            );
                             e.input(EngineEvent::Release(usage));
                             Verdict::Suppress
                         } else {
@@ -256,6 +308,15 @@ impl Backend for MacosNativeBackend {
             engine,
         });
         Ok(())
+    }
+
+    fn reload(&self, profile: &ViaProfile) -> Result<(), BackendError> {
+        // `apply()` is already idempotent — when the runtime is `Some`, it
+        // hot-swaps the engine in place via `carry_over_to()` without
+        // teardown/respawn. Calling apply() here preserves the OS event tap
+        // and only swaps the layout, which is the whole point of the
+        // native backend's hot-reload path.
+        self.apply(profile)
     }
 
     fn teardown(&self) -> Result<(), BackendError> {
@@ -468,18 +529,21 @@ fn parse_native_config(s: &str) -> Result<NativeConfig, BackendError> {
 }
 
 /// Map the names the profile schema accepts to keyberon's `KeyCode`.
-/// Covers letters a–z, digits 0–9, modifiers, common edit keys, and `caps`.
-/// The set is deliberately bounded — extending it is a one-line change
-/// when a new key is needed, and the parser surfaces unknown names as
-/// `ProfileRejected` so misspellings don't silently no-op.
+/// Covers the full HHKB layout (letters, digits, modifiers, punctuation,
+/// F-row, arrows, navigation cluster). Names are case-insensitive; both
+/// short kanata-style (`lctl`, `bspc`, `pgup`) and the more verbose
+/// human form (`lctrl`, `backspace`, `pageup`) are accepted so the UI's
+/// kanata token set and the macos-native config can share keys.
+///
+/// Unknown names surface as `None`, which the caller turns into
+/// `ProfileRejected` — typos never silently no-op.
 fn parse_keycode(s: &str) -> Option<KeyCode> {
     let n = s.trim().to_ascii_lowercase();
+
+    // Single-character shortcuts: a–z and 0–9.
     if n.len() == 1 {
         let c = n.as_bytes()[0];
         if c.is_ascii_lowercase() {
-            // Map 'a'..'z' to KeyCode::A..KeyCode::Z. The kanata-keyberon
-            // KeyCode discriminants are not portable across versions, so
-            // build via match rather than `transmute`.
             return Some(match c {
                 b'a' => KeyCode::A,
                 b'b' => KeyCode::B,
@@ -526,22 +590,75 @@ fn parse_keycode(s: &str) -> Option<KeyCode> {
             });
         }
     }
+
+    // F1–F12 (`f1`..`f12`).
+    if let Some(rest) = n.strip_prefix('f') {
+        if let Ok(num) = rest.parse::<u8>() {
+            return match num {
+                1 => Some(KeyCode::F1),
+                2 => Some(KeyCode::F2),
+                3 => Some(KeyCode::F3),
+                4 => Some(KeyCode::F4),
+                5 => Some(KeyCode::F5),
+                6 => Some(KeyCode::F6),
+                7 => Some(KeyCode::F7),
+                8 => Some(KeyCode::F8),
+                9 => Some(KeyCode::F9),
+                10 => Some(KeyCode::F10),
+                11 => Some(KeyCode::F11),
+                12 => Some(KeyCode::F12),
+                _ => None,
+            };
+        }
+    }
+
     Some(match n.as_str() {
+        // Control & whitespace
         "esc" | "escape" => KeyCode::Escape,
         "tab" => KeyCode::Tab,
         "space" | "spc" => KeyCode::Space,
-        "enter" | "ret" => KeyCode::Enter,
+        "enter" | "ret" | "return" => KeyCode::Enter,
         "bspc" | "backspace" => KeyCode::BSpace,
         "del" | "delete" => KeyCode::Delete,
         "caps" | "capslock" => KeyCode::CapsLock,
+
+        // Modifiers
         "lctl" | "lctrl" => KeyCode::LCtrl,
         "rctl" | "rctrl" => KeyCode::RCtrl,
         "lsft" | "lshift" => KeyCode::LShift,
         "rsft" | "rshift" => KeyCode::RShift,
         "lalt" => KeyCode::LAlt,
         "ralt" => KeyCode::RAlt,
-        "lgui" | "lcmd" | "lwin" => KeyCode::LGui,
-        "rgui" | "rcmd" | "rwin" => KeyCode::RGui,
+        "lgui" | "lcmd" | "lwin" | "lmet" | "lmeta" => KeyCode::LGui,
+        "rgui" | "rcmd" | "rwin" | "rmet" | "rmeta" => KeyCode::RGui,
+
+        // Punctuation (mirrors kanata's token spellings where applicable)
+        "minus" | "-" => KeyCode::Minus,
+        "equal" | "eql" | "=" => KeyCode::Equal,
+        "lbrk" | "lbracket" | "[" => KeyCode::LBracket,
+        "rbrk" | "rbracket" | "]" => KeyCode::RBracket,
+        "bslh" | "bslash" | "backslash" | "\\" => KeyCode::Bslash,
+        "scln" | "semicolon" | ";" => KeyCode::SColon,
+        "quot" | "apostrophe" | "'" => KeyCode::Quote,
+        "grv" | "grave" | "`" => KeyCode::Grave,
+        "comma" | "," => KeyCode::Comma,
+        "dot" | "period" | "." => KeyCode::Dot,
+        "fslh" | "slash" | "/" => KeyCode::Slash,
+
+        // Navigation cluster
+        "ins" | "insert" => KeyCode::Insert,
+        "home" => KeyCode::Home,
+        "end" => KeyCode::End,
+        "pgup" | "pageup" => KeyCode::PgUp,
+        "pgdn" | "pgdown" | "pagedown" => KeyCode::PgDown,
+        "left" => KeyCode::Left,
+        "right" | "rght" => KeyCode::Right,
+        "up" => KeyCode::Up,
+        "down" => KeyCode::Down,
+        "prnt" | "prtsc" | "printscreen" => KeyCode::PScreen,
+        "slck" | "scrolllock" => KeyCode::ScrollLock,
+        "paus" | "pause" => KeyCode::Pause,
+
         _ => return None,
     })
 }
