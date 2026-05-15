@@ -50,12 +50,29 @@ interface KeymapDto {
 }
 
 export class DaemonError extends Error {
+  /**
+   * Stable machine-readable error code from the daemon's JSON body when
+   * present (e.g. `backend_inactive`, `backend_not_ready`,
+   * `invalid_config`). Lets callers branch on the failure mode without
+   * parsing free-form `message`. Undefined for network errors or pre-2xx
+   * failures that didn't return JSON.
+   */
+  readonly code?: string;
+  /**
+   * Backend id (e.g. "macos-native") attached to `backend_inactive` and
+   * `backend_not_ready` payloads. Useful for "switch to X first" toasts.
+   */
+  readonly backend?: string;
+
   constructor(
     message: string,
     readonly status?: number,
+    extras?: { code?: string; backend?: string },
   ) {
     super(message);
     this.name = 'DaemonError';
+    this.code = extras?.code;
+    this.backend = extras?.backend;
   }
 }
 
@@ -91,9 +108,33 @@ async function requestJson<T>(
     } catch {
       // ignore
     }
+    // Daemon error bodies are JSON when the response shape is structured:
+    //   { error: "<code>", message: "<human>", active?, backend?, missing? }
+    // Pull `error` / `backend` / `active` into the DaemonError so callers
+    // can branch on them without re-parsing the body string themselves.
+    let code: string | undefined;
+    let backend: string | undefined;
+    let humanMessage = body;
+    if (body) {
+      try {
+        const parsed = JSON.parse(body) as {
+          error?: string;
+          message?: string;
+          active?: string;
+          backend?: string;
+        };
+        if (typeof parsed.error === 'string') code = parsed.error;
+        if (typeof parsed.backend === 'string') backend = parsed.backend;
+        else if (typeof parsed.active === 'string') backend = parsed.active;
+        if (typeof parsed.message === 'string') humanMessage = parsed.message;
+      } catch {
+        // body wasn't JSON — leave as-is
+      }
+    }
     throw new DaemonError(
-      `${res.status} ${res.statusText}${body ? `: ${body}` : ''}`,
+      `${res.status} ${res.statusText}${humanMessage ? `: ${humanMessage}` : ''}`,
       res.status,
+      { code, backend },
     );
   }
 

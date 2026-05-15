@@ -26,6 +26,7 @@ import {
   MousePointerClick,
   AlertTriangle,
 } from 'lucide-react';
+import { useBackendStore } from '../store/backendStore';
 import { useDeviceStore } from '../store/deviceStore';
 import { useUiStore } from '../store/uiStore';
 import { HHKB_LAYOUT } from '../data/hhkbLayout';
@@ -57,6 +58,15 @@ export function KeyDetailPanel({
 
   const origin = useKeyOrigin(selectedIndex, layer);
   const swToken = useSoftwareTokenAt(selectedIndex);
+  const activeBackend = useBackendStore((s) => s.active);
+  const softwareLabel =
+    activeBackend === 'macos-native'
+      ? 'Software (macOS native)'
+      : activeBackend === 'hidutil'
+        ? 'Software (hidutil)'
+        : activeBackend === 'eeprom'
+          ? 'Software (inactive — backend is eeprom)'
+          : 'Software (kanata)';
 
   const [picking, setPicking] = useState(false);
   const [bindingModal, setBindingModal] = useState(false);
@@ -242,9 +252,11 @@ export function KeyDetailPanel({
             />
             <BindingRow
               icon={<Code2 size={14} />}
-              label="Software (kanata)"
+              label={softwareLabel}
               value={swToken ? describeToken(swToken.token) : 'not set'}
               active={origin === 'sw'}
+              disabled={activeBackend === 'eeprom'}
+              disabledHint="switch backend to enable"
               onClick={() => setBindingModal(true)}
             />
           </VStack>

@@ -21,6 +21,7 @@ import {
 import { Layers } from 'lucide-react';
 import { BindingsPanel } from './BindingsPanel';
 import { HHKB_LAYOUT } from '../data/hhkbLayout';
+import { useBackendStore } from '../store/backendStore';
 
 interface Props {
   isOpen: boolean;
@@ -30,6 +31,15 @@ interface Props {
 
 export function KeyBindingModal({ isOpen, onClose, keyIndex }: Props) {
   const keyMeta = HHKB_LAYOUT.find((k) => k.index === keyIndex);
+  const activeBackend = useBackendStore((s) => s.active);
+  const backendHint =
+    activeBackend === 'macos-native'
+      ? 'Active backend: macOS native — bindings apply through CGEventTap. Hardware EEPROM is not touched.'
+      : activeBackend === 'hidutil'
+        ? 'Active backend: hidutil — bindings persist via LaunchAgent.'
+        : activeBackend === 'eeprom'
+          ? 'Active backend: EEPROM — software bindings are saved but inert. Switch to kanata or macOS native to activate them.'
+          : "Writes to the active profile's kanata config. Hardware EEPROM is not touched.";
 
   return (
     <Modal
@@ -57,7 +67,7 @@ export function KeyBindingModal({ isOpen, onClose, keyIndex }: Props) {
             </Tag>
           </HStack>
           <Text fontSize="11px" color="text.muted" fontFamily="mono" mt={1.5}>
-            Writes to the active profile's kanata config. Hardware EEPROM is not touched.
+            {backendHint}
           </Text>
         </ModalHeader>
         <ModalCloseButton />
