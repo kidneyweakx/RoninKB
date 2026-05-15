@@ -14,7 +14,12 @@ use tokio::sync::{broadcast, Mutex};
 use hhkb_core::device::HhkbDevice;
 use hhkb_core::transport::HidApiTransport;
 
+use crate::backend::eeprom::EepromBackend;
+use crate::backend::kanata::KanataBackend;
+use crate::backend::registry::BackendRegistry;
+use crate::backend::{Backend, BackendId};
 use crate::ble::BleManager;
+use crate::config::DaemonConfig;
 use crate::db;
 use crate::error::{ApiError, ApiResult};
 use crate::flow::FlowManager;
@@ -33,6 +38,15 @@ pub struct AppState {
     /// if the kanata binary isn't installed the manager simply reports
     /// `NotInstalled` and refuses start/stop/reload.
     pub kanata: Arc<KanataManager>,
+    /// v0.2.0 backend registry. Populated alongside `kanata` so the existing
+    /// `/kanata/*` routes keep working unchanged; the `/backend/*` routes
+    /// read this registry to expose the unified surface.
+    pub backends: Arc<BackendRegistry>,
+    /// Persistent daemon configuration (`config.toml`). Holds the user's
+    /// pinned backend choice and any future global daemon knobs. Wrapped in
+    /// `Arc` so route handlers can clone-and-spawn-blocking without the
+    /// state itself having to be re-locked.
+    pub daemon_config: Arc<DaemonConfig>,
     /// Flow (cross-device clipboard sync) manager. Not enabled by default;
     /// the caller must POST `/flow/enable` to start it.
     pub flow: Arc<FlowManager>,
@@ -89,11 +103,22 @@ impl AppState {
         // frontend connects, already-paired BLE devices are in the cache.
         ble.probe_connected(events.clone());
 
+        let daemon_config = Arc::new(DaemonConfig::load_default());
+
+        let device_handle = Arc::new(Mutex::new(device));
+        let backends = Arc::new(build_backend_registry(
+            Arc::clone(&device_handle),
+            Arc::clone(&kanata),
+            daemon_config.pinned_backend(),
+        ));
+
         Ok(Self {
-            device: Arc::new(Mutex::new(device)),
+            device: device_handle,
             db: Arc::new(Mutex::new(conn)),
             events,
             kanata,
+            backends,
+            daemon_config,
             flow: Arc::new(FlowManager::new()),
             ble,
             auto_reconnect: true,
@@ -114,11 +139,34 @@ impl AppState {
             uuid::Uuid::new_v4(),
         ));
         let kanata = Arc::new(KanataManager::with_paths(None, kanata_cfg));
+        let device = Arc::new(Mutex::new(None));
+        // Tests get an in-memory config rooted at no path, so set/get works
+        // without writing to disk and without leaking pins between test runs.
+        let daemon_config = Arc::new(DaemonConfig::for_tests(
+            None,
+            crate::config::DaemonConfigFile::default(),
+        ));
+        // Build the registry with kanata as the active backend so the
+        // existing /kanata/* integration tests keep their semantics — the
+        // M4 §82 backend_inactive guard is exercised separately in tests
+        // that explicitly switch the active backend via /backend/select.
+        let backends = Arc::new(build_backend_registry(
+            Arc::clone(&device),
+            Arc::clone(&kanata),
+            daemon_config.pinned_backend(),
+        ));
+        // The kanata backend reports Required permissions when its binary
+        // isn't installed (test default), so the auto-pick never lands on
+        // it. Force-select kanata explicitly: registry.select() ignores
+        // permission state — it just records the user's choice.
+        let _ = backends.select(BackendId::Kanata);
         Self {
-            device: Arc::new(Mutex::new(None)),
+            device,
             db: Arc::new(Mutex::new(conn)),
             events,
             kanata,
+            backends,
+            daemon_config,
             flow: Arc::new(FlowManager::new()),
             ble: Arc::new(BleManager::unavailable()),
             auto_reconnect: false,
@@ -194,6 +242,33 @@ impl AppState {
             }
         }
     }
+}
+
+/// Construct the v0.2.0 backend registry. Order matters — RFC 0001 §4.4
+/// auto-selects the first backend whose `permission_status` is `Granted`,
+/// so on macOS we list the native backend before kanata to default new
+/// users away from the third-party DriverKit dependency. EEPROM sits at the
+/// end because it always coexists with one of the software backends rather
+/// than competing for selection.
+fn build_backend_registry(
+    device: DeviceHandle,
+    kanata: Arc<KanataManager>,
+    pin: Option<BackendId>,
+) -> BackendRegistry {
+    let kanata_backend: Arc<dyn Backend> = Arc::new(KanataBackend::new(kanata));
+    let eeprom_backend: Arc<dyn Backend> = Arc::new(EepromBackend::new(device));
+
+    #[cfg(target_os = "macos")]
+    let backends: Vec<Arc<dyn Backend>> = vec![
+        Arc::new(crate::backend::macos_native::MacosNativeBackend::new()),
+        Arc::new(crate::backend::hidutil::HidutilBackend::new()),
+        kanata_backend,
+        eeprom_backend,
+    ];
+    #[cfg(not(target_os = "macos"))]
+    let backends: Vec<Arc<dyn Backend>> = vec![kanata_backend, eeprom_backend];
+
+    BackendRegistry::new_with_pin(backends, pin)
 }
 
 fn default_db_path() -> anyhow::Result<std::path::PathBuf> {

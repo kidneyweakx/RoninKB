@@ -1,5 +1,6 @@
 //! HTTP route handlers grouped by resource.
 
+pub mod backend;
 pub mod bluetooth;
 pub mod device;
 pub mod flow;

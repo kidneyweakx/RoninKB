@@ -53,12 +53,13 @@ import {
   X,
 } from 'lucide-react';
 import { HHKB_LAYOUT, type HhkbKey } from '../data/hhkbLayout';
+import { useBackendStore } from '../store/backendStore';
 import { useDaemonStore } from '../store/daemonStore';
 import { useKanataStore } from '../store/kanataStore';
 import { useProfileStore } from '../store/profileStore';
 import {
   KEYCODES,
-  generateKanataConfig,
+  generateConfigForBackend,
   parseKeyBindings,
   tokenToLabel,
   type KeyBinding,
@@ -113,15 +114,24 @@ const TYPE_LABELS: Record<KeyBinding['type'], string> = {
   'layer-switch': 'Layer',
 };
 
-/** Stamp a new kanata config onto the profile's `_roninKB.software` extension. */
-function applyConfigToProfile(via: ViaProfile, config: string): ViaProfile {
+/**
+ * Stamp a new software config onto the profile's `_roninKB.software`
+ * extension. Engine label MUST match the active backend so the daemon's
+ * backend dispatch picks the right reader — kanata reads `engine: "kanata"`,
+ * the native backend reads `engine: "macos-native"`, etc.
+ */
+function applyConfigToProfile(
+  via: ViaProfile,
+  config: string,
+  engine: string,
+): ViaProfile {
   const cloned: ViaProfile = JSON.parse(JSON.stringify(via)) as ViaProfile;
   const ext: RoninExtension = cloned._roninKB ?? {
     version: '1',
     profile: { id: crypto.randomUUID(), name: cloned.name },
   };
   ext.software = {
-    engine: ext.software?.engine ?? 'kanata',
+    engine,
     engine_version: ext.software?.engine_version,
     config,
   };
@@ -161,6 +171,12 @@ export function BindingsPanel({ focusKeyIndex, onSaved, onCancel }: Props) {
   const kanataBinaryPath = useKanataStore((s) => s.binaryPath);
   const kanataLastError = useKanataStore((s) => s.error);
   const kanataInstalled = useKanataStore((s) => s.installed);
+  // Active backend drives both the config format we generate and the
+  // reload path we take. macos-native consumes a JSON config; kanata
+  // consumes its own text format. eeprom/hidutil don't read software
+  // bindings at all (UI surfaces this so users know the edits sit
+  // dormant until they switch backend).
+  const activeBackend = useBackendStore((s) => s.active);
   const [activating, setActivating] = useState(false);
 
   /**
@@ -332,8 +348,8 @@ export function BindingsPanel({ focusKeyIndex, onSaved, onCancel }: Props) {
         setEditingKey(null);
         setDraft(null);
       }
-      const config = generateKanataConfig(finalBindings);
-      const nextVia = applyConfigToProfile(activeProfile.via, config);
+      const { engine, config } = generateConfigForBackend(activeBackend, finalBindings);
+      const nextVia = applyConfigToProfile(activeProfile.via, config, engine);
 
       if (daemonStatus === 'online' && daemonClient) {
         try {
@@ -359,25 +375,89 @@ export function BindingsPanel({ focusKeyIndex, onSaved, onCancel }: Props) {
           }
         }
 
-        // Ensure kanata is running before attempting reload.
-        // If it's stopped (but installed), auto-start it so the bindings
-        // take effect immediately.
-        if (kanataProcessState === 'stopped') {
+        // Backend dispatch:
+        //   - kanata: keep the existing flow (auto-start kanata if stopped,
+        //     then hot-reload). User can revoke Input Monitoring etc.
+        //   - macos-native / hidutil: re-activate the profile via
+        //     /profiles/active. The daemon picks up the new config and
+        //     dispatches to whichever backend is active (RFC 0001 §4.4).
+        //   - eeprom: software bindings don't apply to EEPROM at all; we
+        //     save them so a later switch to kanata/macos-native picks
+        //     them up.
+        if (activeBackend === 'kanata' || activeBackend === null) {
+          if (kanataProcessState === 'stopped') {
+            try {
+              await kanataStart();
+            } catch (e) {
+              const raw = e instanceof Error ? e.message : String(e);
+              const isPermIssue =
+                kanataInputMonitoring === false ||
+                raw.includes('Input Monitoring') ||
+                raw.includes('kanata_permission_required');
+              toast({
+                title: isPermIssue
+                  ? 'Grant Input Monitoring to apply bindings'
+                  : 'Kanata failed to start',
+                description: isPermIssue
+                  ? 'Bindings saved. macOS needs permission for kanata to capture keys — see the banner above to open System Settings.'
+                  : `Bindings saved but kanata didn't start: ${raw}`,
+                status: 'warning',
+                duration: 6000,
+                isClosable: true,
+              });
+              await useProfileStore.getState().loadFromDaemon();
+              onSaved?.();
+              return;
+            }
+          }
+
+          if (kanataProcessState !== 'not_installed') {
+            try {
+              await daemonClient.kanataReload(config);
+            } catch (e) {
+              toast({
+                title: 'Bindings saved — kanata reload failed',
+                description: e instanceof Error ? e.message : String(e),
+                status: 'warning',
+                duration: 5000,
+                isClosable: true,
+              });
+              await useProfileStore.getState().loadFromDaemon();
+              onSaved?.();
+              return;
+            }
+          }
+
+          await useProfileStore.getState().loadFromDaemon();
+          toast({
+            title:
+              kanataProcessState === 'not_installed'
+                ? 'Bindings saved (kanata not installed)'
+                : 'Bindings saved & applied',
+            status: 'success',
+            duration: 2000,
+          });
+        } else if (activeBackend === 'macos-native' || activeBackend === 'hidutil') {
+          // Trigger the daemon's backend-dispatch path: setActiveProfile
+          // re-reads the profile, derives the active backend's config,
+          // and calls reload() on it.
           try {
-            await kanataStart();
+            await daemonClient.setActiveProfile(activeProfile.id);
           } catch (e) {
-            const raw = e instanceof Error ? e.message : String(e);
-            const isPermIssue =
-              kanataInputMonitoring === false ||
-              raw.includes('Input Monitoring') ||
-              raw.includes('kanata_permission_required');
+            const err = e instanceof DaemonError ? e : null;
+            const isPerm =
+              err?.code === 'backend_not_ready' ||
+              (err?.message ?? '').includes('Input Monitoring') ||
+              (err?.message ?? '').includes('Accessibility');
             toast({
-              title: isPermIssue
-                ? 'Grant Input Monitoring to apply bindings'
-                : 'Kanata failed to start',
-              description: isPermIssue
-                ? 'Bindings saved. macOS needs permission for kanata to capture keys — see the banner above to open System Settings.'
-                : `Bindings saved but kanata didn't start: ${raw}`,
+              title: isPerm
+                ? `${activeBackend} needs OS permission`
+                : `Bindings saved — ${activeBackend} reload failed`,
+              description: isPerm
+                ? 'Open System Settings → Privacy & Security → Input Monitoring (and Accessibility) and enable RoninKB Daemon.'
+                : e instanceof Error
+                  ? e.message
+                  : String(e),
               status: 'warning',
               duration: 6000,
               isClosable: true,
@@ -386,34 +466,25 @@ export function BindingsPanel({ focusKeyIndex, onSaved, onCancel }: Props) {
             onSaved?.();
             return;
           }
+          await useProfileStore.getState().loadFromDaemon();
+          toast({
+            title: `Bindings saved & applied (${activeBackend})`,
+            status: 'success',
+            duration: 2000,
+          });
+        } else {
+          // eeprom or unknown: bindings persisted, but inert until backend
+          // switches. Tell the user instead of pretending it worked.
+          await useProfileStore.getState().loadFromDaemon();
+          toast({
+            title: 'Bindings saved (inactive)',
+            description:
+              'Active backend is "eeprom" — software bindings will only take effect after switching to "kanata" or "macos-native".',
+            status: 'info',
+            duration: 5000,
+            isClosable: true,
+          });
         }
-
-        if (kanataProcessState !== 'not_installed') {
-          try {
-            await daemonClient.kanataReload(config);
-          } catch (e) {
-            // Reload failed — bindings are saved to disk but not active.
-            toast({
-              title: 'Bindings saved — kanata reload failed',
-              description: e instanceof Error ? e.message : String(e),
-              status: 'warning',
-              duration: 5000,
-              isClosable: true,
-            });
-            await useProfileStore.getState().loadFromDaemon();
-            onSaved?.();
-            return;
-          }
-        }
-
-        await useProfileStore.getState().loadFromDaemon();
-        toast({
-          title: kanataProcessState === 'not_installed'
-            ? 'Bindings saved (kanata not installed)'
-            : 'Bindings saved & applied',
-          status: 'success',
-          duration: 2000,
-        });
       } else {
         // Daemon offline — persist locally
         useProfileStore.setState((s) => ({

@@ -8,8 +8,11 @@ class Roninkb < Formula
     url "https://github.com/kidneyweakx/RoninKB/releases/download/v#{version}/roninKB-v#{version}-universal-apple-darwin.tar.gz"
     sha256 "f2530061c42f1b7d44b9af43d032590af6b754e2f05aa1925920acae2d7da511"
 
-    # kanata can't grab keys on macOS without Karabiner-DriverKit-VirtualHIDDevice.
-    # Karabiner-Elements bundles that driver. We can't `depends_on cask: ...`
+    # v0.2.0+ default macOS path uses the native CGEventTap backend; no
+    # third-party driver required. Power users who want DriverKit-grade
+    # tap-hold can opt into the Kanata backend via the UI, which depends on
+    # Karabiner-DriverKit-VirtualHIDDevice (shipped with Karabiner-Elements).
+    # We can't `depends_on cask: ...`
     # from a third-party tap (Homebrew rejects it as an unsupported special
     # dependency), so the caveats below walk users through the one-line cask
     # install. The daemon's /kanata/status endpoint surfaces driver_activated
@@ -56,19 +59,16 @@ class Roninkb < Formula
         hhkb info
         hhkb dump
 
-      macOS first-run setup (kanata software-binding layer):
-        1. Install Karabiner-Elements — it ships the DriverKit system extension
-           kanata needs in order to grab keys (no other supported install path
-           on macOS):
+      macOS first-run setup:
+        1. Open the web UI. Settings → "Software backend" lists every backend
+           the daemon detects. The native backend (default in v0.2.0) needs
+           only Input Monitoring + Accessibility — both prompted in-app.
+        2. Power users wanting sub-100 ms tap-hold can install Karabiner-Elements
+           and switch the active backend to "Kanata" in the same panel:
              brew install --cask karabiner-elements
-        2. Open /Applications/Karabiner-Elements.app once. It will prompt for
-           the Karabiner-DriverKit-VirtualHIDDevice system extension; approve
-           it in System Settings → Privacy & Security → Login Items &
-           Extensions → Driver Extensions. A reboot may be required the very
-           first time.
-        3. Grant Input Monitoring to the kanata binary in System Settings →
-           Privacy & Security → Input Monitoring. The bundle path is:
-             ~/Applications/RoninKB Kanata.app/Contents/MacOS/kanata
+           The Karabiner sysext setup is fully driven from the UI's
+           "Activate driver" / "Open System Settings" buttons — no manual
+           hunting through Settings panes required.
 
       Linux users: install the udev rule first so the daemon can talk to hidraw:
         sudo cp #{pkgshare}/install/linux/99-roninKB.rules /etc/udev/rules.d/

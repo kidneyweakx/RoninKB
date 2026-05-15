@@ -1,0 +1,18 @@
+{
+  "name": "M1 Home-Row Mods — a=LSft, s=LCtl, d=LAlt, f=LGui",
+  "vendorId": "0x04FE",
+  "productId": "0x0021",
+  "layers": [],
+  "_roninKB": {
+    "version": "1.0",
+    "profile": {
+      "id": "1b2c3d4e-5f60-7182-93a4-b5c6d7e8f9a0",
+      "name": "M1 Home-Row Mods",
+      "tags": ["m1", "validation", "home-row"]
+    },
+    "software": {
+      "engine": "macos-native",
+      "config": "{\"caps\":{\"type\":\"holdtap\",\"timeout_ms\":200,\"tap\":\"esc\",\"hold\":\"lctl\"},\"bindings\":{\"a\":{\"type\":\"holdtap\",\"timeout_ms\":200,\"tap\":\"a\",\"hold\":\"lsft\"},\"s\":{\"type\":\"holdtap\",\"timeout_ms\":200,\"tap\":\"s\",\"hold\":\"lctl\"},\"d\":{\"type\":\"holdtap\",\"timeout_ms\":200,\"tap\":\"d\",\"hold\":\"lalt\"},\"f\":{\"type\":\"holdtap\",\"timeout_ms\":200,\"tap\":\"f\",\"hold\":\"lgui\"}}}"
+    }
+  }
+}

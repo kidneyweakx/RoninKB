@@ -1,0 +1,42 @@
+[package]
+name = "hhkb-macos-native"
+version = "0.2.0-dev"
+edition = "2021"
+description = "macOS native keyboard remapper backend for RoninKB (M1 PoC for v0.2.0)"
+license = "MIT"
+publish = false
+
+[lib]
+name = "hhkb_macos_native"
+path = "src/lib.rs"
+
+[dependencies]
+kanata-keyberon = "0.1110"
+thiserror = "2"
+tracing = "0.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-graphics = "0.25"
+io-kit-sys = "0.5"
+libc = "0.2"
+
+[dev-dependencies]
+anyhow = "1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[example]]
+name = "spike_engine"
+path = "examples/spike_engine.rs"
+
+[[example]]
+name = "spike_event_tap"
+path = "examples/spike_event_tap.rs"
+
+[[example]]
+name = "spike_iohid_seize"
+path = "examples/spike_iohid_seize.rs"
+
+[[example]]
+name = "poc_full"
+path = "examples/poc_full.rs"

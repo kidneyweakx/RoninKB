@@ -1,3 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["crates/hhkb-core", "crates/hhkb-cli", "crates/hhkb-daemon"]
+members = [
+  "crates/hhkb-core",
+  "crates/hhkb-cli",
+  "crates/hhkb-daemon",
+  "crates/hhkb-macos-native",
+]

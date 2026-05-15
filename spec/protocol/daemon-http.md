@@ -64,9 +64,31 @@ Status mapping from `error.rs:66-103`:
 | `KanataAlreadyRunning` | 409 | `kanata_already_running` |
 | `KanataNotRunning` | 409 | `kanata_not_running` |
 | `KanataIo(_)` | 500 | `kanata_io_error` |
+| `BackendInactive { active }` | 409 | `backend_inactive` |
 | `Flow(Disabled)` | 503 | `flow_disabled` |
 | `Flow(Mdns)` | 500 | `flow_mdns_error` |
 | `Flow(PeerUnreachable)` | 500 | `flow_peer_unreachable` |
+
+### 3.2 `backend_inactive` body shape (v0.2.0+)
+
+When a `/kanata/*` mutating route is hit while a non-kanata backend
+owns the keyboard (see §4.4 / §4.X), the response body is extended
+with `active` and `next_action` fields so v0.1.x clients can recover
+without guessing:
+
+```json
+{
+  "error": "backend_inactive",
+  "message": "backend kanata is not active (current: macos-native)",
+  "active": "macos-native",
+  "next_action": "POST /backend/select with {\"id\":\"kanata\"}"
+}
+```
+
+`active` is always one of the `BackendId` strings (`eeprom`,
+`macos-native`, `hidutil`, `kanata`) or `"none"` when no backend is
+selected. `next_action` is a free-form hint; clients should not parse
+it programmatically — read `active` instead.
 
 ## 4. Endpoint inventory
 
@@ -128,17 +150,74 @@ Derived from `crates/hhkb-daemon/src/lib.rs:35-90`.
 | GET | `/profiles/active` | Active profile id | — | `{ id: string? }` | `db_error` |
 | POST | `/profiles/active` | Switch active | `{ id }` | `{ id }` | `not_found`, `kanata_*`, `internal_error` |
 
-### 4.4 Kanata
+### 4.4 Kanata (v0.1.x compat aliases)
+
+> v0.2.0: these endpoints are **compat aliases** for `/backend/*` (see
+> §4.5). Reads stay 200 OK on every active backend; mutating routes
+> return `409 backend_inactive` (see §3.2) when a non-kanata backend
+> owns the keyboard. Removed in v0.3.0 — new clients should target
+> `/backend/*` directly.
 
 | Method | Path | Purpose | Request | Response | Errors |
 |--------|------|---------|---------|----------|--------|
-| GET | `/kanata/status` | Binary + live state | — | `{ installed, config_path, state, pid? }` | — |
-| POST | `/kanata/start` | Spawn child | — | `{ pid }` | `kanata_not_installed`, `kanata_already_running` |
-| POST | `/kanata/stop` | Terminate child | — | `{ status: "stopped" }` | `kanata_not_running` |
-| POST | `/kanata/reload` | Write cfg + SIGUSR1 | `{ config }` | `{ status: "reloaded" }` | `kanata_io_error`, `internal_error` |
-| GET | `/kanata/config` | Read current on-disk cfg | — | `{ config, path }` | `kanata_io_error` |
+| GET | `/kanata/status` | Binary + live state — **always 200, transparent read** | — | `{ installed, config_path, state, pid? }` | — |
+| GET | `/kanata/config` | Read current on-disk cfg — **always 200, transparent read** | — | `{ config, path }` | `kanata_io_error` |
+| POST | `/kanata/start` | Spawn child | — | `{ pid }` | `kanata_not_installed`, `kanata_already_running`, `backend_inactive` |
+| POST | `/kanata/stop` | Terminate child | — | `{ status: "stopped" }` | `kanata_not_running`, `backend_inactive` |
+| POST | `/kanata/reload` | Write cfg + SIGUSR1 | `{ config }` | `{ status: "reloaded" }` | `kanata_io_error`, `internal_error`, `backend_inactive` |
+| POST | `/kanata/driver/activate` | macOS — register Karabiner DriverKit sysext | — | `{ outcome, driver_state }` | `internal_error` (non-macOS), `backend_inactive` |
+| POST | `/kanata/driver/open-settings` | macOS — open System Settings → Driver Extensions | — | `{ status: "opened" }` | `internal_error` (non-macOS), `backend_inactive` |
+| POST | `/kanata/reveal` | Open Finder/Explorer at the kanata binary | — | `{ path, bundle? }` | `kanata_not_installed` |
 
-### 4.5 Flow
+### 4.5 Backend (v0.2.0+)
+
+The authoritative surface for software-binding control. The daemon
+holds a registry of backends (`eeprom`, `macos-native`, `hidutil`,
+`kanata`); see RFC 0001 §4–5 for what each one does and which
+permissions it needs.
+
+| Method | Path | Purpose | Request | Response | Errors |
+|--------|------|---------|---------|----------|--------|
+| GET | `/backend/list` | Every registered backend with capabilities + permission state + `is_active` | — | `{ backends: BackendInfo[], active: BackendId? }` | — |
+| GET | `/backend/status` | Diagnostics for the active backend only | — | `{ active: BackendInfo? }` | — |
+| POST | `/backend/select` | Switch the active backend; persists to `config.toml` | `{ id: BackendId }` | `{ active: BackendId }` | `not_found` |
+
+`BackendId` is one of `"eeprom"`, `"macos-native"`, `"hidutil"`,
+`"kanata"`.
+
+**`BackendInfo` shape:**
+
+```json
+{
+  "id": "macos-native",
+  "human_name": "macOS Native",
+  "capabilities": {
+    "per_key_remap": true,
+    "layers": 16,
+    "tap_hold": "best_effort",
+    "leader_keys": true,
+    "combos": true,
+    "app_aware": true,
+    "per_device": false,
+    "persistent": false,
+    "hot_reload": true,
+    "macros": false,
+    "max_macro_length": 0
+  },
+  "permission_status": { "kind": "granted" },
+  "diagnostics": { "state": "running", "note": null },
+  "is_active": true
+}
+```
+
+`tap_hold` is one of `"none"`, `"best_effort"`, `"driver_grade"`.
+`permission_status` is either `{ "kind": "granted" }` or
+`{ "kind": "required", "permissions": [RequiredPermission, …] }` where
+each `RequiredPermission` has a `type` field
+(`"input_monitoring"`, `"accessibility"`, `"system_extension"`,
+`"user_action"`) plus type-specific fields (e.g. `deep_link`).
+
+### 4.6 Flow
 
 See `flow.md` for wire formats.
 
@@ -156,7 +235,7 @@ See `flow.md` for wire formats.
 | POST | `/flow/sync` | Push local clipboard | `{ content }` | `{ entry }` | `flow_disabled`, `flow_peer_unreachable` |
 | POST | `/flow/receive` | Inbound from peer | `{ peer_id, hostname, content }` | `{ entry }` | `flow_disabled` |
 
-### 4.6 WebSocket + embedded UI
+### 4.7 WebSocket + embedded UI
 
 | Method | Path | Purpose |
 |--------|------|---------|

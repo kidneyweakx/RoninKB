@@ -29,6 +29,12 @@ cargo check -p hhkb-daemon --features tray,clipboard
 # Requires the frontend to be built first (embedded-ui inlines dist/):
 ( cd apps/hhkb-app && npm ci && npm run build )
 cargo check -p hhkb-daemon --features embedded-ui
+
+# v0.2.0 — hhkb-macos-native is a workspace member, cfg(target_os = "macos")
+# only. Compiles into hhkb-daemon as a regular dependency on macOS; on
+# Linux/Windows it isn't compiled at all.
+cargo check -p hhkb-macos-native      # macOS only
+cargo test  -p hhkb-macos-native      # macOS only
 ```
 
 ### Frontend — `apps/hhkb-app`
@@ -52,6 +58,26 @@ sudo apt-get install -y \
 ```
 
 Missing any of these → `cargo build` fails on Linux only.
+
+## v0.2.0 backend architecture (RFC 0001)
+
+The daemon owns a `BackendRegistry` (`crates/hhkb-daemon/src/backend/registry.rs`)
+holding `Vec<Arc<dyn Backend>>` in priority order. On startup the registry
+auto-selects the highest-priority backend whose `permission_status() ==
+Granted`; users can override via `POST /backend/select`. The registry
+coexists with the legacy `state.kanata` field — `/kanata/*` routes still
+work as v0.1.x compat aliases.
+
+Backends:
+
+- `EepromBackend` (`backend/eeprom.rs`) — HHKB hardware EEPROM, always coexists.
+- `KanataBackend` (`backend/kanata.rs`) — wraps `KanataManager`. DriverGrade tap-hold; opt-in on macOS, default on Linux/Windows.
+- `HidutilBackend` (`backend/hidutil.rs`, macOS only) — system-wide modifier swaps via `hidutil property --set` + LaunchAgent.
+- `MacosNativeBackend` (`backend/macos_native.rs`, macOS only) — wraps `hhkb-macos-native`. Best-effort tap-hold; default on macOS in v0.2.0.
+
+When adding a new backend: implement the `Backend` trait, add a `BackendId`
+variant, register it in `state::build_backend_registry`, and add trait
+conformance tests under that backend's module.
 
 ## Platform-specific gotchas (recent CI breakers)
 

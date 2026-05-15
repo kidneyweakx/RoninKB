@@ -3,12 +3,33 @@
 use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
 
+use crate::backend::BackendId;
 use crate::db;
 use crate::error::{ApiError, ApiResult};
-use crate::kanata::KanataStatus;
+use crate::kanata::{DriverActivateResult, DriverState, KanataStatus};
 use crate::kanata_config;
 use crate::state::AppState;
 use crate::ws::DaemonEvent;
+
+/// Guard for v0.1.x `/kanata/*` aliases that mutate state (start/stop/reload
+/// /driver). M4 §82: the v0.2.0 contract is "/backend/* is authoritative;
+/// /kanata/* is compat". Status reads stay 200 OK regardless of active
+/// backend so old UI dashboards don't go dark, but anything that would
+/// actually drive kanata while a different backend owns the keyboard is a
+/// 409 — old clients can detect this and prompt the user to switch via
+/// `POST /backend/select`.
+fn ensure_kanata_is_active(state: &AppState) -> ApiResult<()> {
+    let active = state.backends.active();
+    match active {
+        Some(BackendId::Kanata) => Ok(()),
+        Some(other) => Err(ApiError::BackendInactive {
+            active: other.as_str().to_string(),
+        }),
+        None => Err(ApiError::BackendInactive {
+            active: "none".to_string(),
+        }),
+    }
+}
 
 #[derive(Debug, Serialize)]
 pub struct StatusResponse {
@@ -19,8 +40,13 @@ pub struct StatusResponse {
     /// macOS-only: `Some(true)` if the Karabiner DriverKit sysext is
     /// `[activated enabled]`. `Some(false)` means it's missing or stuck in
     /// `waiting for user`. `None` on other platforms or when the check
-    /// couldn't run.
+    /// couldn't run. Kept for backwards-compat with v0.1.x clients —
+    /// new clients should read `driver_state` for the granular flavour.
     pub driver_activated: Option<bool>,
+    /// macOS-only granular Karabiner DriverKit sysext state. One of
+    /// `activated`, `waiting_for_user`, `not_registered`,
+    /// `karabiner_not_installed`, `unknown`. `None` on non-macOS.
+    pub driver_state: Option<DriverState>,
     pub last_error: Option<String>,
     pub stderr_tail: Vec<String>,
     pub device_path: Option<String>,
@@ -68,7 +94,7 @@ pub async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
         config_path,
         binary_path,
         input_monitoring_granted,
-        driver_activated,
+        driver_state,
         last_error,
         stderr_tail,
         device_path,
@@ -80,7 +106,7 @@ pub async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
             kanata.config_path().to_path_buf(),
             kanata.binary_path().map(|p| p.display().to_string()),
             kanata.input_monitoring_granted(),
-            kanata.driver_activated(),
+            kanata.driver_state(),
             kanata.last_error(),
             kanata.stderr_tail(20),
             kanata.last_device_path(),
@@ -93,18 +119,27 @@ pub async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
         Default::default(),
         None,
         None,
-        None,
+        DriverState::Unknown,
         Some("failed to read kanata status".to_string()),
         vec![],
         None,
     ));
+
+    // The driver_state field is meaningful only on macOS; on Linux/Windows we
+    // emit `null` so the field stays platform-honest.
+    let (driver_state_field, driver_activated_field) = if cfg!(target_os = "macos") {
+        (Some(driver_state), driver_state.as_bool())
+    } else {
+        (None, None)
+    };
 
     Json(StatusResponse {
         installed,
         binary_path,
         config_path: config_path.display().to_string(),
         input_monitoring_granted,
-        driver_activated,
+        driver_activated: driver_activated_field,
+        driver_state: driver_state_field,
         last_error,
         stderr_tail,
         device_path,
@@ -112,7 +147,63 @@ pub async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
     })
 }
 
+#[derive(Debug, Serialize)]
+pub struct DriverActivateResponse {
+    #[serde(flatten)]
+    pub outcome: DriverActivateResult,
+    /// New driver state observed immediately after the activate attempt.
+    /// On the happy path this transitions through `WaitingForUser` and lands
+    /// on `Activated` once the user clicks "allow" in System Settings.
+    pub driver_state: DriverState,
+}
+
+/// `POST /kanata/driver/activate` — invoke
+/// `Karabiner-VirtualHIDDevice-Manager activate` to register / re-arm the
+/// system extension. macOS-only; returns 503 on other platforms.
+///
+/// This is the smarter alternative to telling the user "open Karabiner once":
+/// the daemon does the same thing the Karabiner-Elements first-launch does.
+/// The user will still have to confirm the sysext in System Settings (only
+/// the user can do that), but the prompt is now triggered instead of
+/// requiring them to find it.
+pub async fn driver_activate(
+    State(state): State<AppState>,
+) -> ApiResult<Json<DriverActivateResponse>> {
+    if !cfg!(target_os = "macos") {
+        return Err(ApiError::Internal(
+            "driver activation is macOS-only".to_string(),
+        ));
+    }
+    ensure_kanata_is_active(&state)?;
+    let kanata = state.kanata.clone();
+    let (outcome, driver_state) = tokio::task::spawn_blocking(move || {
+        kanata
+            .driver_activate()
+            .map(|outcome| (outcome, kanata.driver_state()))
+    })
+    .await??;
+    Ok(Json(DriverActivateResponse {
+        outcome,
+        driver_state,
+    }))
+}
+
+/// `POST /kanata/driver/open-settings` — open System Settings deep-linked to
+/// Driver Extensions so the user can flip the Karabiner sysext on. macOS-only.
+pub async fn driver_open_settings(State(state): State<AppState>) -> ApiResult<Json<OkResponse>> {
+    if !cfg!(target_os = "macos") {
+        return Err(ApiError::Internal(
+            "open-settings is macOS-only".to_string(),
+        ));
+    }
+    ensure_kanata_is_active(&state)?;
+    let kanata = state.kanata.clone();
+    tokio::task::spawn_blocking(move || kanata.driver_open_settings()).await??;
+    Ok(Json(OkResponse { status: "opened" }))
+}
+
 pub async fn start(State(state): State<AppState>) -> ApiResult<Json<StartResponse>> {
+    ensure_kanata_is_active(&state)?;
     ensure_startup_config(&state).await?;
     let kanata = state.kanata.clone();
     let pid = tokio::task::spawn_blocking(move || kanata.start()).await??;
@@ -121,6 +212,7 @@ pub async fn start(State(state): State<AppState>) -> ApiResult<Json<StartRespons
 }
 
 pub async fn stop(State(state): State<AppState>) -> ApiResult<Json<OkResponse>> {
+    ensure_kanata_is_active(&state)?;
     let kanata = state.kanata.clone();
     tokio::task::spawn_blocking(move || kanata.stop()).await??;
     let _ = state.events.send(DaemonEvent::KanataStopped);
@@ -131,6 +223,7 @@ pub async fn reload(
     State(state): State<AppState>,
     Json(body): Json<ReloadBody>,
 ) -> ApiResult<Json<OkResponse>> {
+    ensure_kanata_is_active(&state)?;
     kanata_config::validate_kanata_config(&body.config)
         .map_err(crate::error::ApiError::InvalidConfig)?;
     let kanata = state.kanata.clone();

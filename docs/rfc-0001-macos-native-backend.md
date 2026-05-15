@@ -276,7 +276,45 @@ The wizard tells home-row-mod power users to install Karabiner. The default user
 
 ## 10. Migration & breaking changes
 
-- `/kanata/*` REST endpoints stay as deprecated aliases for `/backend/*` so v0.1.x clients keep working through the v0.2.0 cycle. Removed in v0.3.0.
+### 10.1 `/kanata/*` compat contract (v0.2.x)
+
+`/kanata/*` survives as a v0.1.x compat surface, but the contract
+splits along read vs. write so v0.2.0 clients on a non-kanata backend
+get a deterministic answer instead of silently driving the wrong
+backend:
+
+| Method | Path                       | Behaviour when active backend ≠ kanata |
+| ------ | -------------------------- | -------------------------------------- |
+| GET    | `/kanata/status`           | **200 OK** — transparent read of the kanata supervisor's view (installed?, driver state, last error). Old dashboards keep polling. |
+| GET    | `/kanata/config`           | **200 OK** — transparent read of the on-disk kanata config. |
+| POST   | `/kanata/start`            | **409 `backend_inactive`** — driving kanata while another backend owns the keyboard would race. |
+| POST   | `/kanata/stop`             | **409 `backend_inactive`**. |
+| POST   | `/kanata/reload`           | **409 `backend_inactive`** — config validation still runs, but the reload is refused. |
+| POST   | `/kanata/driver/activate`  | **409 `backend_inactive`** — Karabiner sysext registration is only meaningful when kanata is the active path. |
+| POST   | `/kanata/driver/open-settings` | **409 `backend_inactive`**. |
+| POST   | `/kanata/reveal`           | **200 OK** — purely a Finder helper, not a state mutation. |
+
+The 409 body shape is:
+
+```json
+{
+  "error": "backend_inactive",
+  "message": "backend kanata is not active (current: macos-native)",
+  "active": "macos-native",
+  "next_action": "POST /backend/select with {\"id\":\"kanata\"}"
+}
+```
+
+`active` and `next_action` are guaranteed (every `BackendInactive`
+response carries them), so a v0.1.x dashboard can wrap its existing
+`POST /kanata/start` call in: on 409 → show "switch to kanata?" toast →
+on user confirm, `POST /backend/select {"id":"kanata"}` → retry.
+
+`/kanata/*` will be removed in v0.3.0; v0.2.x clients should migrate to
+the corresponding `/backend/*` routes during this cycle.
+
+### 10.2 Profile + install-time migration
+
 - Existing user profiles parse identically — the binding schema doesn't change. The daemon translates them to whichever engine is active.
 - macOS users who previously installed Karabiner: daemon detects the existing install, keeps the kanata backend selectable, but does **not** auto-select it. Active backend persists across upgrades — if a v0.1.x user had kanata running, they stay on kanata after upgrading to v0.2.0; if they're a fresh install, they default to native.
 - New macOS users: never see Karabiner unless they open Advanced.
@@ -304,11 +342,16 @@ The wizard tells home-row-mod power users to install Karabiner. The default user
 ## 13. References
 
 - [Hyperkey reference architecture (MIT)](https://github.com/feedthejim/hyperkey)
+- [Hammerspoon — Lua-driven CGEventTap remapper (MIT)](https://github.com/Hammerspoon/hammerspoon)
 - [keyberon Rust crate (MIT/Apache)](https://github.com/TeXitoi/keyberon)
 - [smart-keymap library (Apache, active 2025)](https://github.com/rgoulter/smart-keymap)
+- [kanata — LGPL engine, opt-in backend in v0.2.0](https://github.com/jtroo/kanata)
 - [Karabiner-Elements DEVELOPMENT.md (CGEventTap fallback path)](https://github.com/pqrs-org/Karabiner-Elements/blob/main/DEVELOPMENT.md)
+- [Karabiner-DriverKit-VirtualHIDDevice (LGPL sysext, the kanata-path dependency)](https://github.com/pqrs-org/Karabiner-DriverKit-VirtualHIDDevice)
 - [Apple TN2450: Remapping Keys in macOS](https://developer.apple.com/library/archive/technotes/tn2450/_index.html)
 - [Apple CGEvent.tapCreate](https://developer.apple.com/documentation/coregraphics/cgevent/tapcreate(tap:place:options:eventsofinterest:callback:userinfo:))
+- [Apple IOHIDManager (Path B seize on Tahoe)](https://developer.apple.com/documentation/iokit/iohidmanager)
+- [Apple NSWorkspace (frontmost-app + activation notifications)](https://developer.apple.com/documentation/appkit/nsworkspace)
 - [macOS 26 Tahoe Release Notes](https://developer.apple.com/documentation/macos-release-notes/macos-26-release-notes)
 - [Year of the homerow mods (Callista, 2025)](https://callistaenterprise.se/blogg/teknik/2025/01/10/homerow-mods/)
 - [CGEvent Taps and Code Signing race (Daniel Raffel, Feb 2026)](https://danielraffel.me/til/2026/02/19/cgevent-taps-and-code-signing-the-silent-disable-race/)

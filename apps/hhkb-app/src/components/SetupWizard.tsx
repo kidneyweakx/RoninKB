@@ -22,10 +22,11 @@ import {
 } from '@chakra-ui/react';
 import { Check, Circle } from 'lucide-react';
 import { useSetupStore, TOTAL_STEPS } from '../store/setupStore';
+import { useBackendStore } from '../store/backendStore';
 import { StepWelcome } from './setup/StepWelcome';
 import { StepBrowser } from './setup/StepBrowser';
 import { StepDaemon } from './setup/StepDaemon';
-import { StepKanata } from './setup/StepKanata';
+import { StepBackend } from './setup/StepBackend';
 import { StepFirstProfile } from './setup/StepFirstProfile';
 
 export function SetupWizard() {
@@ -38,6 +39,14 @@ export function SetupWizard() {
   const complete = useSetupStore((s) => s.complete);
   const close = useSetupStore((s) => s.close);
   const openManually = useSetupStore((s) => s.openManually);
+  const verifiedBackend = useSetupStore((s) => s.verifiedBackend);
+  const activeBackend = useBackendStore((s) => s.active);
+
+  // Backend step gates Next on a verified-binding self-attestation. The
+  // user can still bail with "Skip setup" — gating just nudges them to
+  // confirm the backend works before moving on (M4 §85).
+  const nextDisabled =
+    currentStep === 3 && (activeBackend === null || verifiedBackend !== activeBackend);
 
   // Auto-open on first run.
   useEffect(() => {
@@ -73,7 +82,7 @@ export function SetupWizard() {
           {currentStep === 0 && <StepWelcome />}
           {currentStep === 1 && <StepBrowser />}
           {currentStep === 2 && <StepDaemon />}
-          {currentStep === 3 && <StepKanata />}
+          {currentStep === 3 && <StepBackend />}
           {currentStep === 4 && <StepFirstProfile onDone={complete} />}
         </ModalBody>
         <ModalFooter>
@@ -92,7 +101,12 @@ export function SetupWizard() {
               </Button>
             </HStack>
             {currentStep < TOTAL_STEPS - 1 ? (
-              <Button variant="solid" size="sm" onClick={goNext}>
+              <Button
+                variant="solid"
+                size="sm"
+                onClick={goNext}
+                isDisabled={nextDisabled}
+              >
                 Next
               </Button>
             ) : null}

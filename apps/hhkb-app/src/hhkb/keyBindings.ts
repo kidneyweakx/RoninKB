@@ -303,6 +303,85 @@ export function hhkbIndexToKanata(index: number): string | undefined {
  * is passed through to the OS unchanged. Stub `deflayer` blocks are emitted
  * for layer-switch targets so kanata doesn't error on undefined layers.
  */
+/**
+ * Generate a macos-native engine config (JSON) from the given bindings.
+ *
+ * The macos-native backend reads `_roninKB.software.config` when
+ * `software.engine === "macos-native"`. Its schema is:
+ *
+ * ```json
+ * {
+ *   "caps": { "type": "holdtap", "timeout_ms": 200, "tap": "esc", "hold": "lctl" },
+ *   "bindings": {
+ *     "a": { "type": "remap", "to": "b" },
+ *     "tab": { "type": "passthrough" }
+ *   }
+ * }
+ * ```
+ *
+ * Only remap and tap-hold bindings round-trip cleanly into this format —
+ * layer-switch is dropped (logged at debug, kept in kanata-only configs)
+ * because the macos-native engine doesn't yet expose kanata's
+ * `layer-while-held` / `layer-toggle` semantics. The daemon's
+ * `parse_keycode` (crates/hhkb-daemon/src/backend/macos_native.rs) accepts
+ * the same kanata-style tokens this function emits.
+ */
+export function generateMacosNativeConfig(bindings: KeyBinding[]): string {
+  if (bindings.length === 0) return '';
+  const out: {
+    caps?: unknown;
+    bindings?: Record<string, unknown>;
+  } = {};
+  const map: Record<string, unknown> = {};
+
+  for (const b of bindings) {
+    const src = HHKB_INDEX_TO_KANATA[b.sourceIndex];
+    if (!src) continue; // unbindable physical key (e.g. HHKB Fn)
+
+    switch (b.type) {
+      case 'remap':
+        map[src] = { type: 'remap', to: b.target };
+        break;
+      case 'tap-hold':
+        map[src] = {
+          type: 'holdtap',
+          timeout_ms: b.timeout,
+          tap: b.tap,
+          hold: b.hold,
+        };
+        break;
+      case 'layer-switch':
+        // macos-native doesn't model kanata's layer-switch yet; drop it
+        // here rather than emit something the daemon will reject.
+        continue;
+    }
+  }
+
+  if (Object.keys(map).length === 0) return '';
+  out.bindings = map;
+  return JSON.stringify(out);
+}
+
+/**
+ * Pick the right config-generator + engine string for a given active
+ * backend. Returns the engine label (which gets stamped into
+ * `_roninKB.software.engine`) and the generated config string.
+ *
+ * `eeprom` and `hidutil` don't read software bindings — for those we
+ * still emit a kanata config so a later switch to kanata picks the
+ * bindings up automatically.
+ */
+export function generateConfigForBackend(
+  backend: 'kanata' | 'macos-native' | 'eeprom' | 'hidutil' | null,
+  bindings: KeyBinding[],
+): { engine: string; config: string } {
+  if (backend === 'macos-native') {
+    return { engine: 'macos-native', config: generateMacosNativeConfig(bindings) };
+  }
+  // Default + fallback: kanata text config.
+  return { engine: 'kanata', config: generateKanataConfig(bindings) };
+}
+
 export function generateKanataConfig(bindings: KeyBinding[]): string {
   if (bindings.length === 0) return '';
 

@@ -1,0 +1,18 @@
+{
+  "name": "M1 Default — Caps→Esc/LCtrl HoldTap",
+  "vendorId": "0x04FE",
+  "productId": "0x0021",
+  "layers": [],
+  "_roninKB": {
+    "version": "1.0",
+    "profile": {
+      "id": "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9",
+      "name": "M1 Default",
+      "tags": ["m1", "validation"]
+    },
+    "software": {
+      "engine": "macos-native",
+      "config": "{\"caps\":{\"type\":\"holdtap\",\"timeout_ms\":200,\"tap\":\"esc\",\"hold\":\"lctl\"}}"
+    }
+  }
+}

@@ -25,12 +25,19 @@ fn startup_banner() -> &'static str {
 }
 
 fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,hhkb_daemon=debug")),
-        )
-        .init();
+    // btleplug's macOS CoreBluetooth backend logs `SendError { Disconnected }`
+    // at ERROR whenever a peripheral handle drops with events still queued
+    // (deviceplug/btleplug#197, #253). It's harmless cleanup noise — silence
+    // that one module so it doesn't drown the daemon log. Users can still
+    // override via RUST_LOG=btleplug=trace.
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,hhkb_daemon=debug"))
+        .add_directive(
+            "btleplug::corebluetooth::internal=off"
+                .parse()
+                .expect("static filter directive parses"),
+        );
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     #[cfg(feature = "tray")]
     {
